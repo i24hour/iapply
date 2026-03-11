@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  profile      Profile?
+  resumes      Resume[]
+  preferences  JobPreferences?
+  applications Application[]
+  commands     AutomationCommand[]
+
+  @@map("users")
+}
+
+model Profile {
+  id             String   @id @default(cuid())
+  userId         String   @unique @map("user_id")
+  fullName       String   @map("full_name")
+  phone          String?
+  location       String?
+  skills         String[]
+  experienceYears Int     @default(0) @map("experience_years")
+  preferredRoles String[] @map("preferred_roles")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+model Resume {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  fileName    String   @map("file_name")
+  fileUrl     String   @map("file_url")
+  parsedData  Json?    @map("parsed_data")
+  uploadedAt  DateTime @default(now()) @map("uploaded_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("resumes")
+}
+
+model JobPreferences {
+  id              String   @id @default(cuid())
+  userId          String   @unique @map("user_id")
+  roles           String[]
+  locations       String[]
+  remoteOnly      Boolean  @default(false) @map("remote_only")
+  minSalary       Int?     @map("min_salary")
+  maxSalary       Int?     @map("max_salary")
+  experienceLevel String   @default("any") @map("experience_level")
+  jobTypes        String[] @default(["full-time"]) @map("job_types")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("job_preferences")
+}
+
+model Job {
+  id          String   @id @default(cuid())
+  platform    String
+  externalId  String   @map("external_id")
+  company     String
+  title       String
+  description String   @db.Text
+  location    String
+  url         String
+  salary      String?
+  isEasyApply Boolean  @default(false) @map("is_easy_apply")
+  postedAt    DateTime? @map("posted_at")
+  scrapedAt   DateTime @default(now()) @map("scraped_at")
+
+  applications Application[]
+
+  @@unique([platform, externalId])
+  @@map("jobs")
+}
+
+model Application {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  jobId         String   @map("job_id")
+  status        String   @default("pending")
+  screenshotUrl String?  @map("screenshot_url")
+  appliedAt     DateTime? @map("applied_at")
+  errorMessage  String?  @map("error_message")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("applications")
+}
+
+model AutomationCommand {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  action    String
+  payload   Json
+  status    String   @default("pending")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("automation_commands")
+}

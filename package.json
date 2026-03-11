@@ -1,0 +1,22 @@
+{
+  "name": "job-automation-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Automated job application platform with AI-powered resume parsing and form filling",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:client": "cd client && npx next dev -p 3000",
+    "dev:server": "tsx server/src/index.ts",
+    "build": "cd client && next build",
+    "install:all": "npm install && cd client && npm install && cd ../server && npm install",
+    "test": "echo \"No tests configured yet\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
