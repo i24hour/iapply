@@ -68,6 +68,13 @@ export interface Application {
 
 export type ApplicationStatus = 'pending' | 'applying' | 'applied' | 'failed' | 'skipped';
 
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'bot';
+  content: string;
+  timestamp: Date;
+}
+
 export interface AutomationStatus {
   isRunning: boolean;
   currentAction?: string;

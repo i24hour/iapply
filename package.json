@@ -4,10 +4,11 @@
   "private": true,
   "description": "Automated job application platform with AI-powered resume parsing and form filling",
   "scripts": {
+    "predev": "node -e \"const fs=require('fs');const p='client/.next';if(fs.existsSync(p))fs.rmSync(p,{recursive:true,force:true})\"",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:client": "cd client && npx next dev -p 3000",
+    "dev:client": "cd client && npm run dev",
     "dev:server": "tsx server/src/index.ts",
-    "build": "cd client && next build",
+    "build": "cd client && npm run build",
     "install:all": "npm install && cd client && npm install && cd ../server && npm install",
     "test": "echo \"No tests configured yet\""
   },

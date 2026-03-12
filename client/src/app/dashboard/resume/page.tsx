@@ -151,7 +151,7 @@ export default function ResumePage() {
                 <div>
                   <p className="text-sm text-gray-600 mb-2">Skills</p>
                   <div className="flex flex-wrap gap-2">
-                    {resume.parsedData.skills?.map((skill, i) => (
+                    {resume.parsedData.skills?.map((skill: string, i: number) => (
                       <span
                         key={i}
                         className="bg-primary-100 text-primary-700 px-3 py-1 rounded-full text-sm"

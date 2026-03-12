@@ -1,266 +1,160 @@
 # Job Automation Platform
 
-Automated job application platform with AI-powered resume parsing and form filling. Automatically searches jobs on LinkedIn, Naukri, and Internshala, matches them with your resume, and applies using a browser extension.
+Automated job application platform with AI-powered resume parsing and form filling.
 
-## Architecture
+## Quick Start
 
-```
-User → Frontend Dashboard (Next.js) → Backend API (Express) → Chrome Extension → Job Platforms
-                                    ↓
-                              AI Service (Python/FastAPI)
-```
-
-## Tech Stack
-
-| Layer      | Technology                          |
-|------------|-------------------------------------|
-| Frontend   | Next.js 14, React 18, Tailwind CSS, Zustand |
-| Backend    | Express.js, Mongoose, JWT Auth      |
-| Database   | MongoDB                             |
-| AI Service | Python, FastAPI (optional)           |
-| Extension  | Chrome Extension (Manifest V3)      |
-
-## Project Structure
-
-```
-job-automation-platform/
-├── client/          # Next.js frontend dashboard
-├── server/          # Node.js/Express backend API
-├── extension/       # Chrome extension for automation
-├── ai-service/      # Python AI service (FastAPI)
-├── shared/          # Shared TypeScript types
-├── package.json     # Root scripts (dev, build)
-└── .env.example     # Environment variable template
-```
-
----
-
-## Getting Started
+> **All commands should be run from the `jobs/` directory (root folder)**
 
 ### Prerequisites
 
-- **Node.js** 18+ → [Download](https://nodejs.org/)
-- **MongoDB** (Community Server or Atlas) → [Download](https://www.mongodb.com/try/download/community)
-- **Git** → [Download](https://git-scm.com/)
+- **Node.js** 18+
+- **MongoDB** (running locally or Atlas)
 
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/<your-username>/job-automation-platform.git
-cd job-automation-platform
-```
-
-### 2. Create a New Branch (recommended)
+### 1. Install Dependencies
 
 ```bash
-git checkout -b dev
-```
-
-### 3. Install Dependencies
-
-```bash
-# Install root dependencies (concurrently, tsx, typescript)
-npm install
-
-# Install client dependencies
-cd client
-npm install
-
-# Install server dependencies
-cd ../server
-npm install
-
-# Go back to root
-cd ..
-```
-
-Or use the shortcut:
-
-```bash
+# Run from: jobs/
 npm run install:all
 ```
 
-### 4. Set Up Environment Variables
+### 2. Setup Environment
 
 ```bash
-# Copy the example env file to the server directory
+# Run from: jobs/
 cp .env.example server/.env
 ```
 
-Edit `server/.env` with your values:
+Edit `server/.env`:
 
 ```env
 PORT=3001
 MONGODB_URI=mongodb://127.0.0.1:27017/job-automation
-JWT_SECRET=your-super-secret-key-change-this
+JWT_SECRET=your-secret-key
 CLIENT_URL=http://localhost:3000
-AI_SERVICE_URL=http://localhost:8000
 ```
 
-> **Important:** Change `JWT_SECRET` to a strong random string in production.
-
-### 5. Start MongoDB
-
-Make sure MongoDB is running:
-
-- **Windows** (if installed as a service): it starts automatically, or run:
-  ```bash
-  net start MongoDB
-  ```
-- **macOS** (Homebrew):
-  ```bash
-  brew services start mongodb-community
-  ```
-- **Linux**:
-  ```bash
-  sudo systemctl start mongod
-  ```
-- **Docker**:
-  ```bash
-  docker run -d -p 27017:27017 --name mongodb mongo:7
-  ```
-
-### 6. Start the Application
-
-#### Option A: Start Both Services Together (recommended)
+### 3. Start MongoDB
 
 ```bash
+# Windows
+net start MongoDB
+
+# macOS
+brew services start mongodb-community
+
+# Linux
+sudo systemctl start mongod
+```
+
+### 4. Start the App
+
+```bash
+# Run from: jobs/
 npm run dev
 ```
 
-This runs the backend (port 3001) and frontend (port 3000) concurrently.
-
-#### Option B: Start Services Individually
-
-**Terminal 1 — Backend:**
-```bash
-npm run dev:server
-```
-
-**Terminal 2 — Frontend:**
-```bash
-cd client
-npm run dev
-```
-
-### 7. Open the App
-
+This automatically clears the Next.js cache and starts both:
 - **Frontend:** http://localhost:3000
-- **Backend API:** http://localhost:3001
+- **Backend:** http://localhost:3001
 
 ---
 
-## Available Scripts
+## Project Structure
 
-| Command             | Description                                    |
-|---------------------|------------------------------------------------|
-| `npm run dev`       | Start both frontend & backend concurrently     |
-| `npm run dev:client`| Start frontend only (port 3000)                |
-| `npm run dev:server`| Start backend only (port 3001)                 |
-| `npm run build`     | Build the frontend for production              |
-| `npm run install:all` | Install all dependencies (root + client + server) |
-
-**From `client/` directory:**
-
-| Command             | Description                   |
-|---------------------|-------------------------------|
-| `npm run dev`       | Start Next.js dev server      |
-| `npm run build`     | Production build              |
-| `npm run start`     | Start production server       |
-| `npm run lint`      | Lint the codebase             |
+```
+jobs/                 ← Run all commands from here
+├── client/           # Next.js frontend (port 3000)
+├── server/           # Express.js backend (port 3001)
+├── extension/        # Chrome extension
+├── ai-service/       # Python AI service
+└── shared/           # Shared types
+```
 
 ---
 
-## API Endpoints
+## Commands (run from jobs/ directory)
 
-### Auth
-| Method | Endpoint       | Description        | Auth |
-|--------|----------------|--------------------|------|
-| POST   | `/auth/signup`  | Create account     | No   |
-| POST   | `/auth/login`   | Login              | No   |
-| GET    | `/auth/me`      | Get current user   | Yes  |
-
-### Profile
-| Method | Endpoint    | Description        | Auth |
-|--------|-------------|--------------------|------|
-| GET    | `/profile`  | Get user profile   | Yes  |
-| PUT    | `/profile`  | Update profile     | Yes  |
-
-### Resume
-| Method | Endpoint         | Description        | Auth |
-|--------|------------------|--------------------|------|
-| GET    | `/resume`        | Get latest resume  | Yes  |
-| POST   | `/resume/upload` | Upload resume      | Yes  |
-
-### Preferences
-| Method | Endpoint        | Description            | Auth |
-|--------|-----------------|------------------------|------|
-| GET    | `/preferences`  | Get job preferences    | Yes  |
-| PUT    | `/preferences`  | Update preferences     | Yes  |
-
-### Automation
-| Method | Endpoint             | Description          | Auth |
-|--------|----------------------|----------------------|------|
-| GET    | `/automation/status` | Get automation status| Yes  |
-| POST   | `/automation/start`  | Start automation     | Yes  |
-| POST   | `/automation/pause`  | Pause automation     | Yes  |
-| POST   | `/automation/stop`   | Stop automation      | Yes  |
-
-### Applications
-| Method | Endpoint             | Description              | Auth |
-|--------|----------------------|--------------------------|------|
-| GET    | `/applications`      | List applications (paginated) | Yes  |
-| GET    | `/applications/:id`  | Get application details  | Yes  |
+| Command              | Description                              |
+|----------------------|------------------------------------------|
+| `npm run dev`        | Start frontend + backend together        |
+| `npm run dev:client` | Start frontend only (port 3000)          |
+| `npm run dev:server` | Start backend only (port 3001)           |
+| `npm run install:all`| Install all dependencies                 |
+| `npm run build`      | Build frontend for production            |
 
 ---
-
-## Features
-
-- **Resume Upload & Parsing**: AI-powered extraction of skills, experience, education
-- **Job Matching**: Intelligent job relevance scoring based on your preferences
-- **Auto Apply**: Automated application to LinkedIn Easy Apply jobs
-- **Form Filling**: AI-generated answers for application questions
-- **Dashboard**: Track all applications with status and screenshots
-- **Job Preferences**: Configure desired roles, locations, salary, and job types
 
 ## Troubleshooting
 
-### Port already in use
+### App stuck loading
+
+The cache is automatically cleared on `npm run dev`. If still having issues, manually clear:
+
+```powershell
+# PowerShell (from jobs/ directory)
+Remove-Item -Recurse -Force client/.next -ErrorAction SilentlyContinue
+npm run dev
+```
 
 ```bash
-# Find and kill the process on a port (Windows PowerShell)
-Get-NetTCPConnection -LocalPort 3000 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+# macOS/Linux (from jobs/ directory)
+rm -rf client/.next
+npm run dev
+```
 
+### Port already in use
+
+```powershell
+# PowerShell
+Get-NetTCPConnection -LocalPort 3000 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+Get-NetTCPConnection -LocalPort 3001 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+```
+
+```bash
 # macOS/Linux
 lsof -ti:3000 | xargs kill -9
+lsof -ti:3001 | xargs kill -9
 ```
 
 ### MongoDB connection failed
 
-Make sure MongoDB is running and accessible at `mongodb://127.0.0.1:27017`. Check with:
 ```bash
 mongosh --eval "db.runCommand({ping:1})"
 ```
 
 ---
 
-## Git Workflow
+## API Endpoints (port 3001)
 
-```bash
-# After cloning, create your dev branch
-git checkout -b dev
+### Auth
+| Method | Endpoint       | Description      |
+|--------|----------------|------------------|
+| POST   | `/auth/signup` | Create account   |
+| POST   | `/auth/login`  | Login            |
+| GET    | `/auth/me`     | Get current user |
 
-# Make changes, then commit
-git add .
-git commit -m "your commit message"
+### Profile & Resume
+| Method | Endpoint         | Description      |
+|--------|------------------|------------------|
+| GET    | `/profile`       | Get profile      |
+| PUT    | `/profile`       | Update profile   |
+| POST   | `/resume/upload` | Upload resume    |
+| GET    | `/resume`        | Get resume       |
 
-# Push to GitHub
-git push -u origin dev
+### Automation
+| Method | Endpoint             | Description         |
+|--------|----------------------|---------------------|
+| GET    | `/automation/status` | Get status          |
+| POST   | `/automation/start`  | Start automation    |
+| POST   | `/automation/pause`  | Pause               |
+| POST   | `/automation/stop`   | Stop                |
 
-# To push main branch
-git checkout main
-git push -u origin main
-```
+### Applications
+| Method | Endpoint           | Description        |
+|--------|--------------------|--------------------|
+| GET    | `/applications`    | List applications  |
+| GET    | `/applications/:id`| Get details        |
 
 ---
 
