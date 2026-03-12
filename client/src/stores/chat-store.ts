@@ -16,7 +16,7 @@ export const useChatStore = create<ChatState>((set) => ({
       id: 'welcome',
       role: 'bot',
       content:
-        'Hi! I\'m your job automation assistant. You can tell me things like:\n• "Apply to 5 jobs"\n• "Start applying"\n• "Pause automation"\n• "Stop"\n• "Show status"\n• "Show my applications"',
+        "👋 Hi! I'm your **Job Assistant**. I can help you with:\n\n• **\"Apply 5 jobs based on my profile\"** — start automation\n• **\"Status\"** — check progress\n• **\"Show my applications\"** — recent history\n• **\"Show my profile\"** or **\"Preferences\"**\n• **\"Help\"** — full command list\n\nWhat would you like to do?",
       timestamp: new Date(),
     },
   ],
@@ -46,7 +46,7 @@ export const useChatStore = create<ChatState>((set) => ({
           id: 'welcome',
           role: 'bot',
           content:
-            'Hi! I\'m your job automation assistant. You can tell me things like:\n• "Apply to 5 jobs"\n• "Start applying"\n• "Pause automation"\n• "Stop"\n• "Show status"\n• "Show my applications"',
+            "👋 Hi! I'm your **Job Assistant**. I can help you with:\n\n• **\"Apply 5 jobs based on my profile\"** — start automation\n• **\"Status\"** — check progress\n• **\"Show my applications\"** — recent history\n• **\"Show my profile\"** or **\"Preferences\"**\n• **\"Help\"** — full command list\n\nWhat would you like to do?",
           timestamp: new Date(),
         },
       ],
