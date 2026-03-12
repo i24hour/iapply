@@ -3,9 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useDashboardStore } from '@/stores/dashboard-store';
 import { automationApi, applicationsApi, profileApi, resumeApi } from '@/lib/api';
-import { AutomationControl } from '@/components/automation-control';
+import { ChatBot } from '@/components/chat-bot';
 import { StatsCard } from '@/components/stats-card';
-import { RecentApplications } from '@/components/recent-applications';
 import { QuickSetup } from '@/components/quick-setup';
 import { Briefcase, CheckCircle, XCircle, Clock } from 'lucide-react';
 
@@ -64,49 +63,46 @@ export default function DashboardPage() {
   const needsSetup = !resume || !profile;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-          <p className="text-gray-600">Manage your automated job applications</p>
+          <p className="text-gray-600">Chat with your job assistant to manage applications</p>
         </div>
       </div>
 
       {needsSetup && !isLoading && <QuickSetup hasResume={!!resume} hasProfile={!!profile} />}
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      {/* Stats Strip */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatsCard
-          title="Jobs Applied"
+          title="Applied"
           value={automationStatus.jobsApplied}
-          icon={<CheckCircle className="h-6 w-6 text-green-600" />}
+          icon={<CheckCircle className="h-5 w-5 text-green-600" />}
           color="green"
         />
         <StatsCard
-          title="Jobs Scraped"
+          title="Scraped"
           value={automationStatus.jobsScraped}
-          icon={<Briefcase className="h-6 w-6 text-blue-600" />}
+          icon={<Briefcase className="h-5 w-5 text-blue-600" />}
           color="blue"
         />
         <StatsCard
           title="Failed"
           value={automationStatus.jobsFailed}
-          icon={<XCircle className="h-6 w-6 text-red-600" />}
+          icon={<XCircle className="h-5 w-5 text-red-600" />}
           color="red"
         />
         <StatsCard
           title="In Queue"
           value={automationStatus.jobsScraped - automationStatus.jobsApplied - automationStatus.jobsFailed}
-          icon={<Clock className="h-6 w-6 text-yellow-600" />}
+          icon={<Clock className="h-5 w-5 text-yellow-600" />}
           color="yellow"
         />
       </div>
 
-      {/* Automation Control */}
-      <AutomationControl />
-
-      {/* Recent Applications */}
-      <RecentApplications applications={applications.slice(0, 5)} />
+      {/* Chat Bot — primary interface */}
+      <ChatBot />
     </div>
   );
 }
