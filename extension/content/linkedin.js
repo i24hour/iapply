@@ -256,22 +256,147 @@ async function fillFormStep() {
   }
 }
 
-// Get value for a field based on label
-function getFieldValue(label) {
-  const labelLower = label.toLowerCase();
-  
-  // These would come from stored profile data
-  const profile = {
-    phone: '1234567890',
-    city: 'San Francisco',
-    yearsExperience: '5'
+// ==========================================
+// ROBUST DOM SNAPSHOT ENGINE
+// ==========================================
+
+function isElementVisible(el) {
+  const rect = el.getBoundingClientRect();
+  const style = window.getComputedStyle(el);
+  return (
+    rect.width > 0 && 
+    rect.height > 0 && 
+    style.visibility !== 'hidden' && 
+    style.display !== 'none' &&
+    style.opacity !== '0'
+  );
+}
+
+function getElementText(el) {
+  // Get text content, prioritizing aria-labels or values for inputs
+  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+    return el.placeholder || el.value || el.name || '';
+  }
+  return el.getAttribute('aria-label') || el.innerText || el.textContent || '';
+}
+
+function buildDOMSnapshot() {
+  const interactiveSelectors = [
+    'button', 'a[href]', 'input', 'select', 'textarea',
+    '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
+    '[role="menuitem"]', '[role="tab"]'
+  ].join(', ');
+
+  const elements = Array.from(document.querySelectorAll(interactiveSelectors));
+  const snapshot = [];
+  let idCounter = 1;
+
+  for (const el of elements) {
+    if (!isElementVisible(el)) continue;
+
+    const text = getElementText(el).trim().replace(/\s+/g, ' ');
+    if (!text && el.tagName !== 'INPUT') continue; // Skip empty elements unless they're inputs
+
+    // Add dataset ID to element for mapping actions later
+    const elementId = `iapply-${idCounter}`;
+    el.setAttribute('data-iapply-id', elementId);
+
+    const rect = el.getBoundingClientRect();
+
+    snapshot.push({
+      id: elementId,
+      tag: el.tagName.toLowerCase(),
+      type: el.getAttribute('type') || null,
+      role: el.getAttribute('role') || null,
+      text: text.substring(0, 100), // truncate very long text
+      value: el.value || undefined,
+      checked: el.checked !== undefined ? el.checked : undefined,
+      center: {
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2)
+      }
+    });
+
+    idCounter++;
+  }
+
+  // Also grab raw text of the body to detect CAPTCHAs or page context broadly
+  const rawText = document.body.innerText.substring(0, 2000);
+
+  return { 
+    elements: snapshot, 
+    rawText,
+    url: window.location.href,
+    title: document.title
   };
-  
-  if (labelLower.includes('phone')) return profile.phone;
-  if (labelLower.includes('city') || labelLower.includes('location')) return profile.city;
-  if (labelLower.includes('years') && labelLower.includes('experience')) return profile.yearsExperience;
-  
-  return null;
+}
+
+
+// ==========================================
+// AGENT ACTION EXECUTION
+// ==========================================
+
+async function executeAgentAction(decision) {
+  const { action, elementId, value } = decision;
+
+  if (action === 'scroll') {
+    await smoothScroll(500);
+    return;
+  }
+
+  if (!elementId) return;
+
+  const el = document.querySelector(`[data-iapply-id="${elementId}"]`);
+  if (!el) {
+    console.warn(`Agent asked to interact with missing element: ${elementId}`);
+    return;
+  }
+
+  try {
+    if (action === 'click') {
+      await humanClick(el);
+    } else if (action === 'type') {
+      await typeText(el, value || '');
+    } else if (action === 'clear_and_type') {
+      // Clear existing value first, then type new text
+      el.focus();
+      el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(300);
+      await typeText(el, value || '');
+    } else if (action === 'pressEnter') {
+      el.focus();
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+      // Also try submitting the closest form
+      const form = el.closest('form');
+      if (form) form.dispatchEvent(new Event('submit', { bubbles: true }));
+    } else if (action === 'select_option') {
+      // Handle <select> dropdowns
+      el.focus();
+      const options = Array.from(el.querySelectorAll('option'));
+      const match = options.find(opt => 
+        opt.textContent.trim().toLowerCase().includes((value || '').toLowerCase())
+      );
+      if (match) {
+        el.value = match.value;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        console.log(`Selected option: "${match.textContent.trim()}" in dropdown`);
+      } else {
+        // If no matching option, try selecting the first non-empty option
+        const firstReal = options.find(opt => opt.value && opt.value !== '');
+        if (firstReal) {
+          el.value = firstReal.value;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          console.log(`Fallback selected: "${firstReal.textContent.trim()}"`);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Action failed:', error);
+  }
 }
 
 // Wait for element to appear
@@ -329,6 +454,19 @@ async function submitApplicationResult(jobId, success, errorMessage = null) {
 
 // Message handler
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Agent core communication
+  if (message.action === 'build_snapshot') {
+    sendResponse({ snapshot: buildDOMSnapshot() });
+    return true;
+  }
+  
+  if (message.action === 'execute_decision') {
+    executeAgentAction(message.decision).then(() => {
+      sendResponse({ success: true });
+    });
+    return true;
+  }
+
   if (message.action === 'start_scraping') {
     (async () => {
       console.log('Starting job scraping...');

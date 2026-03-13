@@ -11,7 +11,7 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 import express from 'express';
 import cors from 'cors';
-import { connectDB } from './lib/mongodb.js';
+// import { connectDB } from './lib/mongodb.js'; // disabled for local dev (no DB needed)
 import { errorHandler } from './middleware/error-handler.js';
 import authRouter from './routes/auth.js';
 import profileRouter from './routes/profile.js';
@@ -39,9 +39,9 @@ app.use('/extension', extensionRouter);
 app.use(errorHandler);
 
 async function start() {
-  await connectDB();
+  // await connectDB(); // disabled for local dev
   app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`🚀 Server running on http://localhost:${PORT} (in-memory mode)`);
   });
 }
 

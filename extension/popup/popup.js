@@ -1,222 +1,118 @@
-// Popup script for Job Auto Apply extension
+// Elements
+const elProvider = document.getElementById('provider');
+const elApiKey = document.getElementById('apiKey');
+const elModel = document.getElementById('model');
+const elBaseUrl = document.getElementById('baseUrl');
+const elSaveSettingsBtn = document.getElementById('saveSettingsBtn');
 
-const API_URL = 'http://localhost:3001';
+const elSearchQuery = document.getElementById('searchQuery');
+const elStartAgentBtn = document.getElementById('startAgentBtn');
+const elStopAgentBtn = document.getElementById('stopAgentBtn');
+const elStatusDot = document.getElementById('statusDot');
+const elStatusText = document.getElementById('statusText');
+const elLogFeed = document.getElementById('logFeed');
 
-// DOM Elements
-const loginForm = document.getElementById('loginForm');
-const dashboard = document.getElementById('dashboard');
-const errorMessage = document.getElementById('errorMessage');
-const emailInput = document.getElementById('email');
-const passwordInput = document.getElementById('password');
-const loginBtn = document.getElementById('loginBtn');
-const logoutBtn = document.getElementById('logoutBtn');
-const userEmail = document.getElementById('userEmail');
-const startBtn = document.getElementById('startBtn');
-const stopBtn = document.getElementById('stopBtn');
-const statusDot = document.getElementById('statusDot');
-const statusText = document.getElementById('statusText');
-const jobsScraped = document.getElementById('jobsScraped');
-const jobsApplied = document.getElementById('jobsApplied');
-
-// State
-let isRunning = false;
-
-// Initialize
-document.addEventListener('DOMContentLoaded', async () => {
-  const auth = await getAuth();
-  if (auth.token) {
-    showDashboard(auth.email);
-    fetchStatus();
-  } else {
-    showLogin();
-  }
+// Load saved settings
+chrome.storage.local.get(['llm_provider', 'llm_api_key', 'llm_model', 'llm_base_url', 'search_query'], (res) => {
+  if (res.llm_provider) elProvider.value = res.llm_provider;
+  if (res.llm_api_key) elApiKey.value = res.llm_api_key;
+  if (res.llm_model) elModel.value = res.llm_model;
+  if (res.llm_base_url) elBaseUrl.value = res.llm_base_url;
+  if (res.search_query) elSearchQuery.value = res.search_query;
 });
 
-// Auth helpers
-async function getAuth() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['auth_token', 'user_email'], (result) => {
-      resolve({
-        token: result.auth_token,
-        email: result.user_email
-      });
-    });
+// Save settings
+elSaveSettingsBtn.addEventListener('click', () => {
+  chrome.storage.local.set({
+    llm_provider: elProvider.value,
+    llm_api_key: elApiKey.value,
+    llm_model: elModel.value,
+    llm_base_url: elBaseUrl.value
+  }, () => {
+    elSaveSettingsBtn.textContent = "Saved!";
+    setTimeout(() => elSaveSettingsBtn.textContent = "Save Settings", 1500);
   });
-}
+});
 
-async function setAuth(token, email) {
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ auth_token: token, user_email: email }, resolve);
-  });
-}
-
-async function clearAuth() {
-  return new Promise((resolve) => {
-    chrome.storage.local.remove(['auth_token', 'user_email'], resolve);
-  });
-}
-
-// UI helpers
-function showLogin() {
-  loginForm.style.display = 'flex';
-  dashboard.style.display = 'none';
-  hideError();
-}
-
-function showDashboard(email) {
-  loginForm.style.display = 'none';
-  dashboard.style.display = 'block';
-  userEmail.textContent = email;
-}
-
-function showError(message) {
-  errorMessage.textContent = message;
-  errorMessage.style.display = 'block';
-}
-
-function hideError() {
-  errorMessage.style.display = 'none';
-}
-
-function updateStatus(running, scraped = 0, applied = 0) {
-  isRunning = running;
-  statusDot.classList.toggle('active', running);
-  statusText.textContent = running ? 'Running' : 'Idle';
-  jobsScraped.textContent = scraped;
-  jobsApplied.textContent = applied;
-  startBtn.style.display = running ? 'none' : 'block';
-  stopBtn.style.display = running ? 'block' : 'none';
-}
-
-// API calls
-async function apiCall(endpoint, method = 'GET', body = null) {
-  const auth = await getAuth();
-  
-  const options = {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-    }
+// Start Agent
+elStartAgentBtn.addEventListener('click', () => {
+  const config = {
+    provider: elProvider.value,
+    apiKey: elApiKey.value,
+    model: elModel.value,
+    baseUrl: elBaseUrl.value,
+    searchQuery: elSearchQuery.value
   };
-  
-  if (auth.token) {
-    options.headers['Authorization'] = `Bearer ${auth.token}`;
-  }
-  
-  if (body) {
-    options.body = JSON.stringify(body);
-  }
-  
-  const response = await fetch(`${API_URL}${endpoint}`, options);
-  const data = await response.json();
-  
-  if (!response.ok) {
-    throw new Error(data.error || 'Request failed');
-  }
-  
-  return data;
+
+  chrome.storage.local.set({ search_query: config.searchQuery });
+
+  chrome.runtime.sendMessage({ action: 'start_agent', config }, (response) => {
+    if (response && response.success) {
+      elStartAgentBtn.style.display = 'none';
+      elStopAgentBtn.style.display = 'block';
+      elStatusDot.classList.add('active');
+      elStatusText.textContent = 'Running';
+      addLog('Agent started.');
+    }
+  });
+});
+
+// Stop Agent
+elStopAgentBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ action: 'stop_agent' }, (response) => {
+    if (response && response.success) {
+      elStartAgentBtn.style.display = 'block';
+      elStopAgentBtn.style.display = 'none';
+      elStatusDot.classList.remove('active');
+      elStatusText.textContent = 'Idle';
+      addLog('Agent stopped.');
+    }
+  });
+});
+
+// Helper for UI logging
+function addLog(message) {
+  const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  div.innerHTML = `<span class="log-time">[${time}]</span> ${message}`;
+  elLogFeed.appendChild(div);
+  elLogFeed.scrollTop = elLogFeed.scrollHeight;
 }
 
-// Event handlers
-loginBtn.addEventListener('click', async () => {
-  const email = emailInput.value.trim();
-  const password = passwordInput.value;
-  
-  if (!email || !password) {
-    showError('Please enter email and password');
-    return;
-  }
-  
-  loginBtn.disabled = true;
-  loginBtn.textContent = 'Signing in...';
-  hideError();
-  
-  try {
-    const response = await apiCall('/auth/login', 'POST', { email, password });
-    await setAuth(response.data.token, response.data.user.email);
-    showDashboard(response.data.user.email);
-    fetchStatus();
-  } catch (error) {
-    showError(error.message);
-  } finally {
-    loginBtn.disabled = false;
-    loginBtn.textContent = 'Sign In';
+// Check background status on popup open
+chrome.runtime.sendMessage({ action: 'get_agent_status' }, (status) => {
+  if (status && status.state && status.state !== 'IDLE' && status.state !== 'DONE') {
+    elStartAgentBtn.style.display = 'none';
+    elStopAgentBtn.style.display = 'block';
+    elStatusDot.classList.add('active');
+    elStatusText.textContent = `Running (Step ${status.step})`;
+    addLog(`Resumed monitoring log feed...`);
   }
 });
 
-logoutBtn.addEventListener('click', async () => {
-  await clearAuth();
-  showLogin();
-  emailInput.value = '';
-  passwordInput.value = '';
-});
-
-startBtn.addEventListener('click', async () => {
-  startBtn.disabled = true;
-  
-  try {
-    // Send message to content script to start scraping
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
-    if (!tab.url.includes('linkedin.com')) {
-      showError('Please navigate to LinkedIn Jobs page first');
-      startBtn.disabled = false;
-      return;
-    }
-    
-    // Start automation via backend
-    await apiCall('/automation/start', 'POST', { count: 10 });
-    
-    // Notify content script
-    chrome.tabs.sendMessage(tab.id, { action: 'start_scraping' });
-    
-    updateStatus(true);
-  } catch (error) {
-    showError(error.message);
-  } finally {
-    startBtn.disabled = false;
-  }
-});
-
-stopBtn.addEventListener('click', async () => {
-  stopBtn.disabled = true;
-  
-  try {
-    await apiCall('/automation/stop', 'POST');
-    updateStatus(false);
-    
-    // Notify content script
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab) {
-      chrome.tabs.sendMessage(tab.id, { action: 'stop' });
-    }
-  } catch (error) {
-    showError(error.message);
-  } finally {
-    stopBtn.disabled = false;
-  }
-});
-
-// Fetch status
-async function fetchStatus() {
-  try {
-    const response = await apiCall('/automation/status');
-    updateStatus(
-      response.data.isRunning,
-      response.data.jobsScraped,
-      response.data.jobsApplied
-    );
-  } catch (error) {
-    console.error('Failed to fetch status:', error);
-  }
-}
-
-// Poll for status updates
-setInterval(fetchStatus, 5000);
-
-// Listen for messages from content script
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'status_update') {
-    fetchStatus();
+// Listen for broadcasted logs from the background script
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.action === 'agent_log') {
+    addLog(message.message, message.isError);
+  } else if (message.action === 'agent_finished') {
+    elStartAgentBtn.style.display = 'block';
+    elStopAgentBtn.style.display = 'none';
+    elStatusDot.classList.remove('active');
+    elStatusText.textContent = 'Done';
+    addLog('Agent finished its task.');
+  } else if (message.action === 'agent_error') {
+    elStartAgentBtn.style.display = 'block';
+    elStopAgentBtn.style.display = 'none';
+    elStatusDot.classList.remove('active');
+    elStatusDot.style.background = '#ef4444';
+    elStatusText.textContent = 'Error';
+    addLog(`ERROR: ${message.error}`);
+  } else if (message.action === 'agent_stopped') {
+    elStartAgentBtn.style.display = 'block';
+    elStopAgentBtn.style.display = 'none';
+    elStatusDot.classList.remove('active');
+    elStatusDot.style.background = '#9ca3af';
+    elStatusText.textContent = 'Idle';
   }
 });

@@ -1,8 +1,8 @@
 import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { Profile } from '../models/Profile.js';
 import { createError } from '../middleware/error-handler.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
+import { db } from '../lib/mockData.js';
 
 const router = Router();
 
@@ -18,12 +18,10 @@ const updateProfileSchema = z.object({
 // Get profile
 router.get('/', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const profile = await Profile.findOne({ userId: req.userId });
-
+    const profile = db.profiles.find((p) => p.userId === req.userId);
     if (!profile) {
       throw createError('Profile not found', 404);
     }
-
     res.json({ success: true, data: profile });
   } catch (error) {
     next(error);
@@ -35,19 +33,16 @@ router.put('/', authenticate, async (req: AuthRequest, res: Response, next: Next
   try {
     const data = updateProfileSchema.parse(req.body);
 
-    const profile = await Profile.findOneAndUpdate(
-      { userId: req.userId },
-      { ...data, userId: req.userId },
-      { upsert: true, new: true, runValidators: true }
-    );
+    const index = db.profiles.findIndex((p) => p.userId === req.userId);
+    if (index === -1) {
+      throw createError('Profile not found', 404);
+    }
 
-    res.json({ success: true, data: profile });
+    db.profiles[index] = { ...db.profiles[index], ...data, updatedAt: new Date() };
+    res.json({ success: true, data: db.profiles[index] });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return res.status(400).json({
-        success: false,
-        error: error.errors[0].message,
-      });
+      return res.status(400).json({ success: false, error: error.errors[0].message });
     }
     next(error);
   }

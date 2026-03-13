@@ -1,4 +1,4 @@
-// Background service worker for Job Auto Apply extension
+import { startAgent, stopAgent, getAgentStatus } from './agent-core.js';
 
 const API_URL = 'http://localhost:3001';
 const POLL_INTERVAL = 5000;
@@ -16,6 +16,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'get_auth') {
     getAuth().then(sendResponse);
     return true; // Keep channel open for async response
+  } else if (message.action === 'start_agent') {
+    startAgent(message.config);
+    sendResponse({ success: true });
+  } else if (message.action === 'stop_agent') {
+    stopAgent();
+    sendResponse({ success: true });
+  } else if (message.action === 'get_agent_status') {
+    sendResponse(getAgentStatus());
+    return true;
   }
 });
 

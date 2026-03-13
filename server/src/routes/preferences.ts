@@ -1,7 +1,7 @@
 import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { JobPreferences } from '../models/JobPreferences.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
+import { db } from '../lib/mockData.js';
 
 const router = Router();
 
@@ -18,7 +18,7 @@ const updatePreferencesSchema = z.object({
 // Get preferences
 router.get('/', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const preferences = await JobPreferences.findOne({ userId: req.userId });
+    const preferences = db.preferences.find((p) => p.userId === req.userId);
 
     if (!preferences) {
       return res.json({
@@ -47,19 +47,33 @@ router.put('/', authenticate, async (req: AuthRequest, res: Response, next: Next
   try {
     const data = updatePreferencesSchema.parse(req.body);
 
-    const preferences = await JobPreferences.findOneAndUpdate(
-      { userId: req.userId },
-      { ...data, userId: req.userId },
-      { upsert: true, new: true, runValidators: true }
-    );
+    const index = db.preferences.findIndex((p) => p.userId === req.userId);
+    const now = new Date();
 
-    res.json({ success: true, data: preferences });
+    if (index === -1) {
+      const newPref = {
+        _id: req.userId!,
+        userId: req.userId!,
+        roles: [],
+        locations: [],
+        remoteOnly: false,
+        minSalary: null,
+        maxSalary: null,
+        experienceLevel: 'any',
+        jobTypes: ['full-time'],
+        ...data,
+        createdAt: now,
+        updatedAt: now,
+      };
+      db.preferences.push(newPref);
+      return res.json({ success: true, data: newPref });
+    }
+
+    db.preferences[index] = { ...db.preferences[index], ...data, updatedAt: now };
+    res.json({ success: true, data: db.preferences[index] });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return res.status(400).json({
-        success: false,
-        error: error.errors[0].message,
-      });
+      return res.status(400).json({ success: false, error: error.errors[0].message });
     }
     next(error);
   }

@@ -1,7 +1,7 @@
 import { Router, Response, NextFunction } from 'express';
-import { Application } from '../models/Application.js';
 import { createError } from '../middleware/error-handler.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
+import { db } from '../lib/mockData.js';
 
 const router = Router();
 
@@ -10,22 +10,17 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response, next: Next
   try {
     const page = parseInt(req.query.page as string) || 1;
     const pageSize = parseInt(req.query.pageSize as string) || 10;
-    const skip = (page - 1) * pageSize;
 
-    const [applications, total] = await Promise.all([
-      Application.find({ userId: req.userId })
-        .populate('jobId')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(pageSize),
-      Application.countDocuments({ userId: req.userId }),
-    ]);
+    const userApps = db.applications
+      .filter((a) => a.userId === req.userId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
-    // Map to match expected shape (job instead of jobId)
-    const items = applications.map((app) => {
-      const obj = app.toObject();
-      return { ...obj, id: obj._id, job: obj.jobId, jobId: undefined };
-    });
+    const total = userApps.length;
+    const items = userApps.slice((page - 1) * pageSize, page * pageSize).map((app) => ({
+      ...app,
+      id: app._id,
+      job: null, // no job data in mock
+    }));
 
     res.json({
       success: true,
@@ -45,14 +40,15 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response, next: Next
 // Get application by ID
 router.get('/:id', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const application = await Application.findById(req.params.id).populate('jobId');
+    const application = db.applications.find(
+      (a) => a._id === req.params.id && a.userId === req.userId
+    );
 
-    if (!application || application.userId.toString() !== req.userId) {
+    if (!application) {
       throw createError('Application not found', 404);
     }
 
-    const obj = application.toObject();
-    res.json({ success: true, data: { ...obj, id: obj._id, job: obj.jobId } });
+    res.json({ success: true, data: { ...application, id: application._id, job: null } });
   } catch (error) {
     next(error);
   }

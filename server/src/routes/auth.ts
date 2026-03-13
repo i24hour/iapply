@@ -2,9 +2,8 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { User } from '../models/User.js';
-import { Profile } from '../models/Profile.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
+import { db, generateId } from '../lib/mockData.js';
 
 const router = Router();
 
@@ -23,22 +22,35 @@ router.post('/signup', async (req, res, next) => {
   try {
     const { fullName, email, password } = signupSchema.parse(req.body);
 
-    const existing = await User.findOne({ email });
+    const existing = db.users.find((u) => u.email === email);
     if (existing) {
       return res.status(400).json({ success: false, error: 'Email already registered' });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.create({ email, passwordHash });
+    const now = new Date();
+    const id = generateId();
 
-    await Profile.create({ userId: user._id, fullName });
+    const user = { _id: id, id, email, passwordHash, createdAt: now, updatedAt: now };
+    db.users.push(user);
 
-    const token = jwt.sign({ userId: user._id.toString() }, process.env.JWT_SECRET!, { expiresIn: '7d' });
+    db.profiles.push({
+      _id: generateId(),
+      userId: id,
+      fullName,
+      skills: [],
+      experienceYears: 0,
+      preferredRoles: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const token = jwt.sign({ userId: id }, process.env.JWT_SECRET || 'local-dev-secret', { expiresIn: '7d' });
 
     res.json({
       success: true,
       data: {
-        user: { id: user._id, email: user.email, createdAt: user.createdAt, updatedAt: user.updatedAt },
+        user: { id, email, createdAt: now, updatedAt: now },
         token,
       },
     });
@@ -51,7 +63,7 @@ router.post('/login', async (req, res, next) => {
   try {
     const { email, password } = loginSchema.parse(req.body);
 
-    const user = await User.findOne({ email });
+    const user = db.users.find((u) => u.email === email);
     if (!user) {
       return res.status(401).json({ success: false, error: 'Invalid email or password' });
     }
@@ -61,7 +73,7 @@ router.post('/login', async (req, res, next) => {
       return res.status(401).json({ success: false, error: 'Invalid email or password' });
     }
 
-    const token = jwt.sign({ userId: user._id.toString() }, process.env.JWT_SECRET!, { expiresIn: '7d' });
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET || 'local-dev-secret', { expiresIn: '7d' });
 
     res.json({
       success: true,
@@ -77,7 +89,7 @@ router.post('/login', async (req, res, next) => {
 
 router.get('/me', authenticate, async (req: AuthRequest, res, next) => {
   try {
-    const user = await User.findById(req.userId);
+    const user = db.users.find((u) => u._id === req.userId);
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
