@@ -92,13 +92,21 @@ export function startTelegramBot(token: string) {
     bot!.sendMessage(msg.chat.id, `📋 *Recent Logs:*\n\n${logText}`, { parse_mode: 'Markdown' });
   });
 
-  // /help command
+  // /screenshot command
+  bot.onText(/\/screenshot/, (msg) => {
+    authorizedChatId = msg.chat.id;
+    pushCommand({ type: 'request_screenshot', payload: {} });
+    bot!.sendMessage(msg.chat.id, '📸 Requesting screenshot from browser...');
+  });
+
+  // Help command
   bot.onText(/\/help/, (msg) => {
     authorizedChatId = msg.chat.id;
     bot!.sendMessage(msg.chat.id,
       `🤖 *iApply Bot Commands:*\n\n` +
       `▸ /apply <query> — Start job search & auto-apply\n` +
       `▸ /stop — Stop the running agent\n` +
+      `▸ /screenshot — Capture Chrome browser window\n` +
       `▸ /status — Check if agent is running\n` +
       `▸ /logs — View last 10 log entries\n` +
       `▸ /help — Show this help message`,
@@ -106,23 +114,74 @@ export function startTelegramBot(token: string) {
     );
   });
 
+  // Conversational Fallback - Any message that doesn't start with '/'
+  bot.on('message', async (msg) => {
+    if (!msg.text || msg.text.startsWith('/')) return;
+    authorizedChatId = msg.chat.id;
+
+    // Check if the user is asking for a screenshot colloquially
+    const textLower = msg.text.toLowerCase();
+    if (textLower.includes('screenshot') || textLower.includes('show me') || textLower.includes('photo')) {
+      pushCommand({ type: 'request_screenshot', payload: {} });
+      bot!.sendMessage(msg.chat.id, '📸 Requesting live screenshot...');
+      return;
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      bot!.sendMessage(msg.chat.id, '⚠️ Conversational AI is disabled. Please set GEMINI_API_KEY in .env');
+      return;
+    }
+
+    try {
+      const status = getAgentStatus();
+      const logs = getRecentLogs(10).map(l => `[${l.timestamp.toISOString()}] ${l.isError ? 'ERROR: ' : ''}${l.message}`).join('\n');
+
+      const systemPrompt = `You are the iApply Telegram Bot Assistant. You control a Chrome extension autonomously applying to LinkedIn jobs.
+Current Agent Status: ${status}
+Recent Logs:
+${logs}
+
+User Message: ${msg.text}
+
+Respond conversationally to the user about what the agent is currently doing or how you can help. Keep it concise, friendly, and use Telegram markdown. Do NOT invent logs that aren't there. If they ask you to start applying, tell them to use /apply <query>.`;
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: systemPrompt }] }],
+          generationConfig: { maxOutputTokens: 250, temperature: 0.7 }
+        })
+      });
+
+      const data = await response.json() as any;
+      const aiResponse = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (aiResponse) {
+        bot!.sendMessage(msg.chat.id, aiResponse, { parse_mode: 'Markdown' });
+      } else {
+        bot!.sendMessage(msg.chat.id, '🤔 I am not sure how to respond to that right now.');
+      }
+    } catch (error) {
+      console.error('Gemini fallback error:', error);
+      bot!.sendMessage(msg.chat.id, '⚠️ Sorry, I could not process your message via AI right now.');
+    }
+  });
+
   // Subscribe to live agent logs and forward to Telegram
   onAgentLog((log) => {
     if (!bot || !authorizedChatId) return;
-    // Throttle: only send important logs (skip "Waiting Xs..." messages)
     if (log.message.startsWith('Waiting')) return;
     
     const emoji = log.isError ? '❌' : '▸';
     const time = log.timestamp.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const msgText = log.message.length > 300 ? log.message.slice(0, 300) + '...' : log.message;
     
-    // Truncate long messages for Telegram
-    const msg = log.message.length > 300 ? log.message.slice(0, 300) + '...' : log.message;
-    
-    bot.sendMessage(authorizedChatId, `\`${time}\` ${emoji} ${msg}`, { parse_mode: 'Markdown' })
-      .catch(() => {}); // Ignore send errors silently
+    bot.sendMessage(authorizedChatId, `\`${time}\` ${emoji} ${msgText}`, { parse_mode: 'Markdown' })
+      .catch(() => {});
   });
 
-  // Handle errors
   bot.on('polling_error', (error) => {
     console.error('Telegram polling error:', error.message);
   });
@@ -133,3 +192,10 @@ export function sendTelegramMessage(text: string) {
     bot.sendMessage(authorizedChatId, text, { parse_mode: 'Markdown' }).catch(() => {});
   }
 }
+
+export function sendTelegramPhoto(buffer: Buffer) {
+  if (bot && authorizedChatId) {
+    bot.sendPhoto(authorizedChatId, buffer, { caption: '📸 Live Agent Screenshot' }).catch(() => {});
+  }
+}
+

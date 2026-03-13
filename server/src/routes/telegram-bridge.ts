@@ -46,4 +46,22 @@ router.post('/status', (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
+// Extension posts a live screenshot requested from Telegram
+router.post('/screenshot', async (req: Request, res: Response) => {
+  const { screenshotBase64 } = req.body;
+  if (screenshotBase64) {
+    try {
+      // Dynamic import to avoid circular dependency
+      const { sendTelegramPhoto } = await import('../lib/telegram.js');
+      // The extension sends a data URI (e.g., data:image/jpeg;base64,...), split it
+      const base64Data = screenshotBase64.replace(/^data:image\/\w+;base64,/, "");
+      const buffer = Buffer.from(base64Data, 'base64');
+      sendTelegramPhoto(buffer);
+    } catch (e) {
+      console.error('Failed to send screenshot to Telegram', e);
+    }
+  }
+  res.json({ success: true });
+});
+
 export default router;

@@ -73,6 +73,43 @@ async function pollTelegramBridge() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: 'idle' }),
         }).catch(() => {});
+      } else if (cmd.type === 'request_screenshot') {
+        // Find the active LinkedIn tab and capture it
+        chrome.tabs.query({ url: 'https://www.linkedin.com/*', active: true }, async (tabs) => {
+          let tabToCapture = tabs[0];
+          // Fallback to any LinkedIn tab if none is active
+          if (!tabToCapture) {
+            const allTabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
+            tabToCapture = allTabs[0];
+          }
+
+          if (tabToCapture) {
+            try {
+              // Bring window to focus so capture works
+              await chrome.windows.update(tabToCapture.windowId, { focused: true });
+              await chrome.tabs.update(tabToCapture.id, { active: true });
+              
+              // Slight delay to allow window to paint
+              setTimeout(() => {
+                chrome.tabs.captureVisibleTab(tabToCapture.windowId, { format: 'jpeg', quality: 50 }, async (dataUrl) => {
+                  if (chrome.runtime.lastError) {
+                    forwardLogToBackend('Failed to capture screenshot: ' + chrome.runtime.lastError.message, true);
+                    return;
+                  }
+                  await fetch(`${API_URL}/agent/screenshot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ screenshotBase64: dataUrl }),
+                  }).catch(() => {});
+                });
+              }, 500);
+            } catch (e) {
+              forwardLogToBackend('Failed to capture screenshot: ' + e.message, true);
+            }
+          } else {
+            forwardLogToBackend('No LinkedIn tab found to capture.', true);
+          }
+        });
       }
 
       // Mark command as completed

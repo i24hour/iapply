@@ -3,7 +3,7 @@
 
 export interface AgentCommand {
   id: string;
-  type: 'start_agent' | 'stop_agent';
+  type: 'start_agent' | 'stop_agent' | 'request_screenshot';
   payload: {
     searchQuery?: string;
     provider?: string;
