@@ -209,7 +209,7 @@ Respond with ONLY a JSON object:
 }
 
 async function callGemini(prompt) {
-  const model = settings.model || 'gemini-1.5-flash';
+  const model = settings.model || 'gemini-3.1-flash-lite-preview';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
   
   const res = await fetch(url, {

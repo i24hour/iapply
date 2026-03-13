@@ -27,7 +27,7 @@ export function startTelegramBot(token: string) {
       `▸ /help — Show this message\n\n` +
       `Example: /apply Frontend Developer`,
       { parse_mode: 'Markdown' }
-    );
+    ).catch(console.error);
   });
 
   // /apply command — starts the agent
@@ -36,13 +36,17 @@ export function startTelegramBot(token: string) {
     const query = match![1].trim();
 
     if (!query) {
-      bot!.sendMessage(msg.chat.id, '❌ Please provide a job query.\nExample: `/apply Product Manager`', { parse_mode: 'Markdown' });
+      bot!.sendMessage(msg.chat.id, '❌ Please provide a job query.\nExample: `/apply Product Manager`', { parse_mode: 'Markdown' }).catch(console.error);
       return;
     }
 
     const cmd = pushCommand({
       type: 'start_agent',
-      payload: { searchQuery: query },
+      payload: { 
+        searchQuery: query,
+        provider: 'gemini',
+        apiKey: process.env.GEMINI_API_KEY || ''
+      },
     });
 
     bot!.sendMessage(msg.chat.id,
@@ -52,7 +56,7 @@ export function startTelegramBot(token: string) {
       `I'll send you live updates as the agent works.\n` +
       `Use /stop to cancel.`,
       { parse_mode: 'Markdown' }
-    );
+    ).catch(console.error);
   });
 
   // /stop command
@@ -64,7 +68,7 @@ export function startTelegramBot(token: string) {
       payload: {},
     });
 
-    bot!.sendMessage(msg.chat.id, '⏹ *Agent Stop command sent.*\nThe extension will stop after the current step.', { parse_mode: 'Markdown' });
+    bot!.sendMessage(msg.chat.id, '⏹ *Agent Stop command sent.*\nThe extension will stop after the current step.', { parse_mode: 'Markdown' }).catch(console.error);
   });
 
   // /status command
@@ -72,7 +76,7 @@ export function startTelegramBot(token: string) {
     authorizedChatId = msg.chat.id;
     const status = getAgentStatus();
     const emoji = status === 'running' ? '🟢' : status === 'error' ? '🔴' : '⚪';
-    bot!.sendMessage(msg.chat.id, `${emoji} Agent Status: *${status.toUpperCase()}*`, { parse_mode: 'Markdown' });
+    bot!.sendMessage(msg.chat.id, `${emoji} Agent Status: *${status.toUpperCase()}*`, { parse_mode: 'Markdown' }).catch(console.error);
   });
 
   // /logs command
@@ -89,14 +93,14 @@ export function startTelegramBot(token: string) {
       return `\`${time}\` ${l.isError ? '❌' : '▸'} ${l.message}`;
     }).join('\n');
 
-    bot!.sendMessage(msg.chat.id, `📋 *Recent Logs:*\n\n${logText}`, { parse_mode: 'Markdown' });
+    bot!.sendMessage(msg.chat.id, `📋 *Recent Logs:*\n\n${logText}`, { parse_mode: 'Markdown' }).catch(console.error);
   });
 
   // /screenshot command
   bot.onText(/\/screenshot/, (msg) => {
     authorizedChatId = msg.chat.id;
     pushCommand({ type: 'request_screenshot', payload: {} });
-    bot!.sendMessage(msg.chat.id, '📸 Requesting screenshot from browser...');
+    bot!.sendMessage(msg.chat.id, '📸 Requesting screenshot from browser...').catch(console.error);
   });
 
   // Help command
@@ -111,7 +115,7 @@ export function startTelegramBot(token: string) {
       `▸ /logs — View last 10 log entries\n` +
       `▸ /help — Show this help message`,
       { parse_mode: 'Markdown' }
-    );
+    ).catch(console.error);
   });
 
   // Conversational Fallback - Any message that doesn't start with '/'
@@ -146,7 +150,7 @@ User Message: ${msg.text}
 
 Respond conversationally to the user about what the agent is currently doing or how you can help. Keep it concise, friendly, and use Telegram markdown. Do NOT invent logs that aren't there. If they ask you to start applying, tell them to use /apply <query>.`;
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

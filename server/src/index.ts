@@ -27,7 +27,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors({ origin: process.env.CLIENT_URL || '*', credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static('uploads'));
 
 app.use('/auth', authRouter);
@@ -40,6 +40,15 @@ app.use('/extension', extensionRouter);
 app.use('/agent', telegramBridgeRouter);
 
 app.use(errorHandler);
+
+// Prevent unhandled promise rejections from crashing the server
+process.on('uncaughtException', (err) => {
+  console.error('🔥 Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🔥 Unhandled Rejection at:', promise, 'reason:', reason);
+});
 
 async function start() {
   // await connectDB(); // disabled for local dev
