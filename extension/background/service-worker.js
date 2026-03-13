@@ -5,6 +5,17 @@ const TELEGRAM_POLL_INTERVAL = 5000;
 
 let telegramPollTimer = null;
 
+// ─── JWT helper: get the stored Supabase access token ────────────────────────
+async function getAuthHeaders() {
+  const result = await chrome.storage.local.get(['supabase_token']);
+  const token = result.supabase_token;
+  if (!token) return { 'Content-Type': 'application/json' };
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`,
+  };
+}
+
 // Listen for messages from popup or content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'start_agent') {
@@ -17,17 +28,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse(getAgentStatus());
     return true;
   } else if (message.action === 'agent_log') {
-    // Forward agent logs to the backend (for Telegram)
     forwardLogToBackend(message.message, message.isError);
+  } else if (message.action === 'set_token') {
+    // Called by popup after Google OAuth to save the JWT
+    chrome.storage.local.set({ supabase_token: message.token });
+    sendResponse({ success: true });
   }
 });
 
 // Forward agent logs to backend → Telegram
 async function forwardLogToBackend(message, isError = false) {
   try {
+    const headers = await getAuthHeaders();
     await fetch(`${API_URL}/agent/log`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ message, isError }),
     });
   } catch {}
@@ -36,14 +51,18 @@ async function forwardLogToBackend(message, isError = false) {
 // Poll Telegram bridge for commands
 async function pollTelegramBridge() {
   try {
-    const response = await fetch(`${API_URL}/agent/poll`);
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/agent/poll`, { headers });
+
+    // If 401, the user isn't logged in yet — just skip silently
+    if (response.status === 401) return;
+
     const data = await response.json();
 
     if (data.success && data.command) {
       const cmd = data.command;
 
       if (cmd.type === 'start_agent') {
-        // Load LLM settings from chrome.storage and merge with Telegram payload
         const settings = await new Promise(resolve => {
           chrome.storage.local.get(['llm_provider', 'llm_api_key', 'llm_model', 'llm_base_url'], resolve);
         });
@@ -58,10 +77,9 @@ async function pollTelegramBridge() {
 
         startAgent(config);
 
-        // Report status back
         fetch(`${API_URL}/agent/status`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await getAuthHeaders(),
           body: JSON.stringify({ status: 'running' }),
         }).catch(() => {});
 
@@ -70,11 +88,11 @@ async function pollTelegramBridge() {
 
         fetch(`${API_URL}/agent/status`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await getAuthHeaders(),
           body: JSON.stringify({ status: 'idle' }),
         }).catch(() => {});
+
       } else if (cmd.type === 'request_screenshot') {
-        // Capture screenshot from any LinkedIn tab
         try {
           const allTabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
           const tabToCapture = allTabs[0];
@@ -82,11 +100,8 @@ async function pollTelegramBridge() {
           if (!tabToCapture) {
             forwardLogToBackend('No LinkedIn tab found to capture.', true);
           } else {
-            // Bring the tab's window into focus for capture
             await chrome.windows.update(tabToCapture.windowId, { focused: true });
             await chrome.tabs.update(tabToCapture.id, { active: true });
-
-            // Wait for the window to paint before capturing
             await new Promise(r => setTimeout(r, 800));
 
             chrome.tabs.captureVisibleTab(tabToCapture.windowId, { format: 'jpeg', quality: 40 }, async (dataUrl) => {
@@ -97,7 +112,7 @@ async function pollTelegramBridge() {
               try {
                 const res = await fetch(`${API_URL}/agent/screenshot`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: await getAuthHeaders(),
                   body: JSON.stringify({ screenshotBase64: dataUrl }),
                 });
                 if (!res.ok) {
@@ -114,10 +129,13 @@ async function pollTelegramBridge() {
       }
 
       // Mark command as completed
-      fetch(`${API_URL}/agent/complete/${cmd.id}`, { method: 'POST' }).catch(() => {});
+      fetch(`${API_URL}/agent/complete/${cmd.id}`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+      }).catch(() => {});
     }
-  } catch (error) {
-    // Backend might not be running — silently ignore
+  } catch {
+    // Backend not reachable — silently ignore
   }
 }
 

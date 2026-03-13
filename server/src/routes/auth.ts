@@ -1,106 +1,89 @@
 import { Router } from 'express';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { z } from 'zod';
+import { supabase, upsertUser } from '../lib/supabase.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
-import { db, generateId } from '../lib/mockData.js';
 
 const router = Router();
 
-const signupSchema = z.object({
-  fullName: z.string().min(1),
-  email: z.string().email(),
-  password: z.string().min(6),
-});
+// ─── Google OAuth: redirect to Google via Supabase ───────────────────────────
+router.get('/google', async (_req, res) => {
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: `${process.env.APP_URL}/auth/callback`,
+      scopes: 'openid email profile',
+    },
+  });
 
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
-
-router.post('/signup', async (req, res, next) => {
-  try {
-    const { fullName, email, password } = signupSchema.parse(req.body);
-
-    const existing = db.users.find((u) => u.email === email);
-    if (existing) {
-      return res.status(400).json({ success: false, error: 'Email already registered' });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    const now = new Date();
-    const id = generateId();
-
-    const user = { _id: id, id, email, passwordHash, createdAt: now, updatedAt: now };
-    db.users.push(user);
-
-    db.profiles.push({
-      _id: generateId(),
-      userId: id,
-      fullName,
-      skills: [],
-      experienceYears: 0,
-      preferredRoles: [],
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    const token = jwt.sign({ userId: id }, process.env.JWT_SECRET || 'local-dev-secret', { expiresIn: '7d' });
-
-    res.json({
-      success: true,
-      data: {
-        user: { id, email, createdAt: now, updatedAt: now },
-        token,
-      },
-    });
-  } catch (error) {
-    next(error);
+  if (error || !data?.url) {
+    return res.status(500).json({ success: false, error: 'Failed to start Google OAuth' });
   }
+
+  res.redirect(data.url);
 });
 
-router.post('/login', async (req, res, next) => {
-  try {
-    const { email, password } = loginSchema.parse(req.body);
+// ─── Google OAuth: callback from Google ──────────────────────────────────────
+router.get('/callback', async (req, res) => {
+  const code = req.query.code as string;
 
-    const user = db.users.find((u) => u.email === email);
-    if (!user) {
-      return res.status(401).json({ success: false, error: 'Invalid email or password' });
-    }
-
-    const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) {
-      return res.status(401).json({ success: false, error: 'Invalid email or password' });
-    }
-
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET || 'local-dev-secret', { expiresIn: '7d' });
-
-    res.json({
-      success: true,
-      data: {
-        user: { id: user._id, email: user.email, createdAt: user.createdAt, updatedAt: user.updatedAt },
-        token,
-      },
-    });
-  } catch (error) {
-    next(error);
+  if (!code) {
+    return res.status(400).send('Missing OAuth code');
   }
+
+  const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+
+  if (error || !data?.session) {
+    return res.status(401).send('OAuth exchange failed: ' + error?.message);
+  }
+
+  const { session, user } = data;
+
+  // Upsert the user in our public.users table
+  try {
+    await upsertUser({
+      id: user.id,
+      email: user.email!,
+      full_name: user.user_metadata?.full_name,
+      avatar_url: user.user_metadata?.avatar_url,
+    });
+  } catch (e) {
+    console.error('Failed to upsert user in DB:', e);
+  }
+
+  // Redirect back to extension or return token in URL hash
+  const redirectUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/auth/success#token=${session.access_token}`;
+  res.redirect(redirectUrl);
 });
 
-router.get('/me', authenticate, async (req: AuthRequest, res, next) => {
-  try {
-    const user = db.users.find((u) => u._id === req.userId);
-    if (!user) {
-      return res.status(404).json({ success: false, error: 'User not found' });
-    }
-
-    res.json({
-      success: true,
-      data: { id: user._id, email: user.email, createdAt: user.createdAt, updatedAt: user.updatedAt },
-    });
-  } catch (error) {
-    next(error);
+// ─── GET /auth/me — get the currently logged-in user ─────────────────────────
+router.get('/me', authenticate, async (req: AuthRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
+
+  res.json({
+    success: true,
+    data: {
+      id: req.user.id,
+      email: req.user.email,
+      full_name: req.user.user_metadata?.full_name,
+      avatar_url: req.user.user_metadata?.avatar_url,
+    },
+  });
+});
+
+// ─── POST /auth/verify — verify a token (used by extension) ──────────────────
+router.post('/verify', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) {
+    return res.status(401).json({ success: false, error: 'No token' });
+  }
+
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) {
+    return res.status(401).json({ success: false, error: 'Invalid token' });
+  }
+
+  res.json({ success: true, data: { id: data.user.id, email: data.user.email } });
 });
 
 export default router;

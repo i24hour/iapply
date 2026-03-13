@@ -1,12 +1,14 @@
 // API routes for the Chrome Extension ↔ Telegram Bot bridge
-// These are UNAUTHENTICATED for local dev simplicity
-import { Router, Request, Response } from 'express';
+// All routes now require a valid Supabase JWT token
+import { Router, Request, Response, NextFunction } from 'express';
 import { getPendingCommand, completeCommand, addLog, setAgentStatus } from '../lib/agent-commands.js';
+import { authenticate, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 
 // Extension polls this every 5 seconds to get new commands from Telegram
-router.get('/poll', (_req: Request, res: Response) => {
+// JWT auth ensures only the real extension (belonging to the user) can poll
+router.get('/poll', authenticate, (_req: AuthRequest, res: Response) => {
   const cmd = getPendingCommand();
   if (!cmd) {
     return res.json({ success: true, command: null });
@@ -23,13 +25,13 @@ router.get('/poll', (_req: Request, res: Response) => {
 });
 
 // Extension marks a command as complete
-router.post('/complete/:id', (req: Request, res: Response) => {
+router.post('/complete/:id', authenticate, (req: AuthRequest, res: Response) => {
   const ok = completeCommand(req.params.id);
   res.json({ success: ok });
 });
 
 // Extension sends live logs here → forwarded to Telegram via listener
-router.post('/log', (req: Request, res: Response) => {
+router.post('/log', authenticate, (req: AuthRequest, res: Response) => {
   const { message, isError } = req.body;
   if (message) {
     addLog(message, !!isError);
@@ -38,7 +40,7 @@ router.post('/log', (req: Request, res: Response) => {
 });
 
 // Extension reports its status
-router.post('/status', (req: Request, res: Response) => {
+router.post('/status', authenticate, (req: AuthRequest, res: Response) => {
   const { status } = req.body;
   if (status) {
     setAgentStatus(status);
@@ -47,14 +49,12 @@ router.post('/status', (req: Request, res: Response) => {
 });
 
 // Extension posts a live screenshot requested from Telegram
-router.post('/screenshot', async (req: Request, res: Response) => {
+router.post('/screenshot', authenticate, async (req: AuthRequest, res: Response) => {
   const { screenshotBase64 } = req.body;
   if (screenshotBase64) {
     try {
-      // Dynamic import to avoid circular dependency
       const { sendTelegramPhoto } = await import('../lib/telegram.js');
-      // The extension sends a data URI (e.g., data:image/jpeg;base64,...), split it
-      const base64Data = screenshotBase64.replace(/^data:image\/\w+;base64,/, "");
+      const base64Data = screenshotBase64.replace(/^data:image\/\w+;base64,/, '');
       const buffer = Buffer.from(base64Data, 'base64');
       sendTelegramPhoto(buffer);
     } catch (e) {
