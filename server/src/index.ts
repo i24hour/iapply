@@ -39,6 +39,10 @@ app.use('/applications', applicationsRouter);
 app.use('/extension', extensionRouter);
 app.use('/agent', telegramBridgeRouter);
 
+app.get('/', (_req, res) => {
+  res.json({ status: 'ok', message: '🤖 iApply Telegram Bot is running!', uptime: process.uptime() });
+});
+
 app.use(errorHandler);
 
 // Prevent unhandled promise rejections from crashing the server
