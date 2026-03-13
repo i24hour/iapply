@@ -1,22 +1,13 @@
 import { startAgent, stopAgent, getAgentStatus } from './agent-core.js';
 
 const API_URL = 'http://localhost:3001';
-const POLL_INTERVAL = 5000;
+const TELEGRAM_POLL_INTERVAL = 5000;
 
-let pollTimer = null;
+let telegramPollTimer = null;
 
 // Listen for messages from popup or content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'start_polling') {
-    startPolling();
-    sendResponse({ success: true });
-  } else if (message.action === 'stop_polling') {
-    stopPolling();
-    sendResponse({ success: true });
-  } else if (message.action === 'get_auth') {
-    getAuth().then(sendResponse);
-    return true; // Keep channel open for async response
-  } else if (message.action === 'start_agent') {
+  if (message.action === 'start_agent') {
     startAgent(message.config);
     sendResponse({ success: true });
   } else if (message.action === 'stop_agent') {
@@ -25,111 +16,79 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'get_agent_status') {
     sendResponse(getAgentStatus());
     return true;
+  } else if (message.action === 'agent_log') {
+    // Forward agent logs to the backend (for Telegram)
+    forwardLogToBackend(message.message, message.isError);
   }
 });
 
-// Auth helper
-async function getAuth() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['auth_token'], (result) => {
-      resolve({ token: result.auth_token });
-    });
-  });
-}
-
-// Polling for commands
-async function pollForCommands() {
+// Forward agent logs to backend → Telegram
+async function forwardLogToBackend(message, isError = false) {
   try {
-    const auth = await getAuth();
-    if (!auth.token) return;
-    
-    const response = await fetch(`${API_URL}/extension/commands`, {
-      headers: {
-        'Authorization': `Bearer ${auth.token}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    const data = await response.json();
-    
-    if (data.success && data.data) {
-      await executeCommand(data.data);
-    }
-  } catch (error) {
-    console.error('Poll error:', error);
-  }
-}
-
-// Execute automation command
-async function executeCommand(command) {
-  const { id, action, payload } = command;
-  
-  // Get active LinkedIn tab
-  const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
-  
-  if (tabs.length === 0) {
-    console.log('No LinkedIn tab found');
-    await completeCommand(id);
-    return;
-  }
-  
-  const tab = tabs[0];
-  
-  // Send command to content script
-  chrome.tabs.sendMessage(tab.id, {
-    action: action,
-    payload: payload,
-    commandId: id
-  });
-}
-
-// Mark command as complete
-async function completeCommand(commandId) {
-  try {
-    const auth = await getAuth();
-    if (!auth.token) return;
-    
-    await fetch(`${API_URL}/extension/commands/${commandId}/complete`, {
+    await fetch(`${API_URL}/agent/log`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${auth.token}`,
-        'Content-Type': 'application/json'
-      }
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, isError }),
     });
+  } catch {}
+}
+
+// Poll Telegram bridge for commands
+async function pollTelegramBridge() {
+  try {
+    const response = await fetch(`${API_URL}/agent/poll`);
+    const data = await response.json();
+
+    if (data.success && data.command) {
+      const cmd = data.command;
+
+      if (cmd.type === 'start_agent') {
+        // Load LLM settings from chrome.storage and merge with Telegram payload
+        const settings = await new Promise(resolve => {
+          chrome.storage.local.get(['llm_provider', 'llm_api_key', 'llm_model', 'llm_base_url'], resolve);
+        });
+
+        const config = {
+          provider: cmd.payload.provider || settings.llm_provider || 'gemini',
+          apiKey: cmd.payload.apiKey || settings.llm_api_key || '',
+          model: cmd.payload.model || settings.llm_model || '',
+          baseUrl: settings.llm_base_url || '',
+          searchQuery: cmd.payload.searchQuery || 'Software Engineer',
+        };
+
+        startAgent(config);
+
+        // Report status back
+        fetch(`${API_URL}/agent/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'running' }),
+        }).catch(() => {});
+
+      } else if (cmd.type === 'stop_agent') {
+        stopAgent();
+
+        fetch(`${API_URL}/agent/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'idle' }),
+        }).catch(() => {});
+      }
+
+      // Mark command as completed
+      fetch(`${API_URL}/agent/complete/${cmd.id}`, { method: 'POST' }).catch(() => {});
+    }
   } catch (error) {
-    console.error('Failed to complete command:', error);
+    // Backend might not be running — silently ignore
   }
 }
 
-function startPolling() {
-  if (pollTimer) return;
-  pollTimer = setInterval(pollForCommands, POLL_INTERVAL);
-  pollForCommands(); // Poll immediately
+// Start Telegram bridge polling on extension load
+function startTelegramPolling() {
+  if (telegramPollTimer) return;
+  telegramPollTimer = setInterval(pollTelegramBridge, TELEGRAM_POLL_INTERVAL);
+  pollTelegramBridge(); // Poll immediately
 }
 
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
-// Start polling when extension loads
-chrome.runtime.onStartup.addListener(() => {
-  getAuth().then(auth => {
-    if (auth.token) {
-      startPolling();
-    }
-  });
-});
-
-// Listen for storage changes to start/stop polling
-chrome.storage.onChanged.addListener((changes, namespace) => {
-  if (namespace === 'local' && changes.auth_token) {
-    if (changes.auth_token.newValue) {
-      startPolling();
-    } else {
-      stopPolling();
-    }
-  }
-});
+// Auto-start polling when extension loads
+startTelegramPolling();

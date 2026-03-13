@@ -174,9 +174,10 @@ RULES:
 5. IMPORTANT: In the Easy Apply modal, only interact with elements that exist in the CURRENT SNAPSHOT. Do not try to answer questions from previous steps that are no longer visible.
 6. IMPORTANT: If a modal section (like Education or Experience) is already filled in or requires no further input, simply click the "Review", "Next", or "Continue" button at the bottom.
 7. CRITICAL: NEVER repeat the exact same "type" or "clear_and_type" action on the same field twice in a row. If the field's "value" in the CURRENT PAGE snapshot already shows your answer (e.g., value="10"), DO NOT type it again. You MUST move on and click "Review" or "Next".
-8. After submitting, look for a success confirmation, then move to the next job.
-9. You can use "navigate" action with a URL as value to go to a different page.
-10. Do NOT declare "finish" unless you have actually submitted at least one application or exhausted all options.
+8. SUCCESS STATE: If you see "Your application was sent" or "Applied", you MUST click the "Done" button or the "Dismiss" / "Close" (X) button to close the modal. DO NOT try to answer anymore questions on this success screen.
+9. After closing the success modal, look for the next job listing with "Easy Apply" and click it to start a new application.
+10. You can use "navigate" action with a URL as value to go to a different page.
+11. Do NOT declare "finish" unless you have exhaustively checked all pages and all jobs.
 11. If an input field already has text but the prompt requires something else, use "clear_and_type" instead of "type".
 12. To submit a search, after typing in the search box, use "pressEnter" on the same element.
 13. For <select> dropdown elements (showing "Select an option" or similar), use "select_option" with the value to select.

@@ -20,6 +20,8 @@ import preferencesRouter from './routes/preferences.js';
 import automationRouter from './routes/automation.js';
 import applicationsRouter from './routes/applications.js';
 import extensionRouter from './routes/extension.js';
+import telegramBridgeRouter from './routes/telegram-bridge.js';
+import { startTelegramBot } from './lib/telegram.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -35,6 +37,7 @@ app.use('/preferences', preferencesRouter);
 app.use('/automation', automationRouter);
 app.use('/applications', applicationsRouter);
 app.use('/extension', extensionRouter);
+app.use('/agent', telegramBridgeRouter);
 
 app.use(errorHandler);
 
@@ -42,6 +45,14 @@ async function start() {
   // await connectDB(); // disabled for local dev
   app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT} (in-memory mode)`);
+    
+    // Start Telegram bot if token is configured
+    const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (telegramToken) {
+      startTelegramBot(telegramToken);
+    } else {
+      console.log('ℹ️  Set TELEGRAM_BOT_TOKEN in .env to enable Telegram bot control.');
+    }
   });
 }
 
