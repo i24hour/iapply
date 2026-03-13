@@ -5,6 +5,10 @@ const API_URL = 'http://localhost:3001';
 // State
 let isRunning = false;
 let currentCommandId = null;
+let postAgentRunning = false;
+let postAgentJobTitle = '';
+let postAgentKeywords = [];
+const processedPostKeys = new Set();
 
 // Human simulation delays
 const DELAYS = {
@@ -27,6 +31,317 @@ function randomDelay(min = DELAYS.minAction, max = DELAYS.maxAction) {
 
 async function humanDelay() {
   await sleep(randomDelay());
+}
+
+function postAgentLog(message, isError = false) {
+  chrome.runtime.sendMessage({ action: 'agent_log', message, isError }, () => {
+    // Popup may be closed; ignore.
+  });
+}
+
+function normalizeText(value) {
+  return (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function extractEmails(text) {
+  const matches = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi);
+  return Array.from(new Set(matches || []));
+}
+
+async function getStoredUserEmail() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['user_email', 'user_portfolio_link'], (result) => {
+      resolve({
+        email: (result.user_email || '').trim(),
+        portfolioLink: (result.user_portfolio_link || '').trim(),
+      });
+    });
+  });
+}
+
+function getFeedPosts() {
+  const selectors = [
+    'div.feed-shared-update-v2',
+    'div.occludable-update',
+    'article[data-urn*="activity"]',
+    'div[data-urn*="activity"]'
+  ].join(', ');
+
+  const candidates = Array.from(document.querySelectorAll(selectors));
+  const unique = [];
+  const seen = new Set();
+
+  for (const el of candidates) {
+    const key = el.getAttribute('data-urn') || `${el.tagName}:${normalizeText((el.innerText || '').slice(0, 120))}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(el);
+  }
+
+  return unique.filter((el) => {
+    const text = normalizeText(el.innerText);
+    return text.length > 40;
+  });
+}
+
+function getPostKey(post, text) {
+  const urn = post.getAttribute('data-urn');
+  if (urn) return urn;
+  return normalizeText(text).slice(0, 220);
+}
+
+async function expandPostText(post) {
+  const buttons = Array.from(post.querySelectorAll('button, a'));
+  const seeMore = buttons.find((btn) => {
+    const txt = normalizeText(btn.innerText || btn.textContent || btn.getAttribute('aria-label') || '');
+    return txt.includes('see more') || txt.includes('...more') || txt.includes('more');
+  });
+
+  if (seeMore && seeMore instanceof HTMLElement) {
+    try {
+      await humanClick(seeMore);
+      await sleep(400);
+    } catch (_error) {
+      // Non-blocking
+    }
+  }
+}
+
+function parseKeywords(rawKeywords) {
+  if (!rawKeywords) return [];
+  return String(rawKeywords)
+    .split(',')
+    .map((k) => normalizeText(k))
+    .filter((k) => k.length > 1);
+}
+
+function isPostRelevant(postText, title, keywords) {
+  const text = normalizeText(postText);
+  const titleTokens = normalizeText(title).split(' ').filter((w) => w.length > 2);
+  const keywordTokens = Array.isArray(keywords) ? keywords : [];
+
+  if (titleTokens.length === 0 && keywordTokens.length === 0) return true;
+
+  let score = 0;
+  let total = 0;
+
+  for (const token of titleTokens) {
+    total += 1;
+    if (text.includes(token)) score += 1;
+  }
+
+  for (const token of keywordTokens) {
+    total += 1;
+    if (text.includes(token)) score += 1;
+  }
+
+  if (total === 0) return true;
+
+  const threshold = Math.max(1, Math.ceil(total * 0.35));
+  return score >= threshold;
+}
+
+function getRelevanceDebug(postText, title, keywords) {
+  const text = normalizeText(postText);
+  const titleTokens = normalizeText(title).split(' ').filter((w) => w.length > 2);
+  const keywordTokens = Array.isArray(keywords) ? keywords : [];
+
+  if (titleTokens.length === 0 && keywordTokens.length === 0) {
+    return {
+      isRelevant: true,
+      matchedTitleTokens: [],
+      matchedKeywordTokens: [],
+      score: 0,
+      threshold: 0,
+      total: 0,
+    };
+  }
+
+  const matchedTitleTokens = titleTokens.filter((token) => text.includes(token));
+  const matchedKeywordTokens = keywordTokens.filter((token) => text.includes(token));
+  const score = matchedTitleTokens.length + matchedKeywordTokens.length;
+  const total = titleTokens.length + keywordTokens.length;
+  const threshold = Math.max(1, Math.ceil(total * 0.35));
+
+  return {
+    isRelevant: score >= threshold,
+    matchedTitleTokens,
+    matchedKeywordTokens,
+    score,
+    threshold,
+    total,
+  };
+}
+
+function isPostRelevantToTitle(postText, title) {
+  if (!title && postAgentKeywords.length === 0) return true;
+  return getRelevanceDebug(postText, title, postAgentKeywords).isRelevant;
+}
+
+function detectPostCTA(postText) {
+  const text = normalizeText(postText);
+  const commentInterested = /(comment\s+interested|interested\s+comment|comment\s+"?interested"?|type\s+interested|drop\s+interested|if\s+you(?:'|’)?re\s+interested[^.\n]*(comment|dm)|interested[^.\n]*(comment\s+below|comment|dm)|dm\s+me\s+or\s+comment\s+below|comment\s+below|drop\s+a\s+comment|like\s*&?\s*comment)/i.test(text);
+  const askEmailInComment = /(comment\s+(your\s+)?(email|gmail|email\s*id)|drop\s+(your\s+)?(email|gmail|email\s*id)|share\s+(your\s+)?(email|gmail|email\s*id)\s+in\s+comments?|type\s+(your\s+)?(email|gmail|email\s*id)\s+in\s+comments?|comment\s+your\s+email\s*id)/i.test(text);
+  const askPortfolioInComment = /(comment\s+(your\s+)?(portfolio|website|portfolio\s+link|website\s+link)|drop\s+(your\s+)?(portfolio|website|link)|share\s+(your\s+)?(portfolio|website)\s+link|comment\s+your\s+portfolio|comment\s+your\s+website)/i.test(text);
+  const sendEmail = /(send\s+(your\s+)?(resume|cv)|email\s+(your\s+)?(resume|cv)|mail\s+(your\s+)?(resume|cv)|send\s+email|dm\s+your\s+resume)/i.test(text);
+  return { commentInterested, askEmailInComment, askPortfolioInComment, sendEmail };
+}
+
+function getCommentTextForPost(postText, cta, profile) {
+  if (cta.askEmailInComment && profile.email) {
+    return profile.email;
+  }
+
+  if (cta.askPortfolioInComment && profile.portfolioLink) {
+    return profile.portfolioLink;
+  }
+
+  if (cta.askPortfolioInComment && !profile.portfolioLink) {
+    return 'Interested';
+  }
+
+  if (cta.commentInterested || cta.sendEmail) {
+    return 'Interested';
+  }
+
+  return '';
+}
+
+function findCommentButton(post) {
+  const candidates = Array.from(post.querySelectorAll('button, [role="button"], span'));
+  return candidates.find((el) => {
+    const text = normalizeText(el.innerText || el.textContent || el.getAttribute?.('aria-label') || '');
+    return text.includes('comment');
+  }) || null;
+}
+
+async function commentOnPost(post, commentText = 'Interested') {
+  const commentButton = post.querySelector('button[aria-label*="Comment"], button[aria-label*="comment"], [data-control-name*="comment"]') || findCommentButton(post);
+  if (!commentButton) {
+    return false;
+  }
+
+  await humanClick(commentButton);
+  await sleep(1200);
+
+  const editor = post.querySelector('div.comments-comment-box__editor[contenteditable="true"], div.ql-editor[contenteditable="true"]')
+    || document.querySelector('div.comments-comment-box__editor[contenteditable="true"], div.ql-editor[contenteditable="true"]');
+  if (!editor) {
+    return false;
+  }
+
+  editor.focus();
+
+  // LinkedIn comment editor often requires rich-text style input events to enable Post button.
+  editor.innerHTML = `<p>${commentText}</p>`;
+  editor.dispatchEvent(new InputEvent('beforeinput', {
+    bubbles: true,
+    inputType: 'insertText',
+    data: commentText,
+  }));
+  editor.dispatchEvent(new InputEvent('input', {
+    bubbles: true,
+    inputType: 'insertText',
+    data: commentText,
+  }));
+  editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', bubbles: true }));
+  await sleep(700);
+
+  const composerRoot = editor.closest('form, .comments-comment-box, .comments-comment-item, .editor-content') || document;
+  const buttonCandidates = [
+    ...Array.from(composerRoot.querySelectorAll('button.comments-comment-box__submit-button--cr, button.comments-comment-box__submit-button, button[aria-label*="Post"], button[data-control-name*="submit_comment"], button')),
+    ...Array.from(document.querySelectorAll('button.comments-comment-box__submit-button--cr, button.comments-comment-box__submit-button, button[aria-label*="Post"], button[data-control-name*="submit_comment"]')),
+  ];
+
+  const submitBtn = buttonCandidates.find((btn) => {
+    if (!(btn instanceof HTMLButtonElement)) return false;
+    if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return false;
+    const text = normalizeText(btn.innerText || btn.textContent || btn.getAttribute('aria-label') || '');
+    return text.includes('post') || text.includes('send') || text.includes('comment');
+  });
+
+  if (submitBtn) {
+    await humanClick(submitBtn);
+    await sleep(600);
+    return true;
+  }
+
+  // Fallback for editors that submit with Ctrl+Enter.
+  editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, ctrlKey: true, bubbles: true }));
+  editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, ctrlKey: true, bubbles: true }));
+  await sleep(500);
+  return true;
+}
+
+async function runPostAgentLoop() {
+  postAgentLog(`Post outreach scanning started for title: ${postAgentJobTitle || 'all'}`);
+
+  while (postAgentRunning) {
+    const posts = getFeedPosts();
+    let scanned = 0;
+    let relevantCount = 0;
+    let ctaCount = 0;
+    let actedCount = 0;
+
+    postAgentLog(`Feed scan: found ${posts.length} post candidates`);
+
+    for (const post of posts) {
+      if (!postAgentRunning) break;
+
+      await expandPostText(post);
+
+      const postText = post.innerText || '';
+      const postKey = getPostKey(post, postText);
+      if (!postKey || processedPostKeys.has(postKey)) {
+        continue;
+      }
+      processedPostKeys.add(postKey);
+      if (processedPostKeys.size > 300) {
+        const firstKey = processedPostKeys.values().next().value;
+        if (firstKey) processedPostKeys.delete(firstKey);
+      }
+
+      scanned += 1;
+
+      const relevance = getRelevanceDebug(postText, postAgentJobTitle, postAgentKeywords);
+      if (!relevance.isRelevant) {
+        continue;
+      }
+      relevantCount += 1;
+      const matchedTitle = relevance.matchedTitleTokens.join(', ') || 'none';
+      const matchedKeywords = relevance.matchedKeywordTokens.join(', ') || 'none';
+      postAgentLog(`Relevance match: score ${relevance.score}/${relevance.total} (need ${relevance.threshold}) | title=[${matchedTitle}] | keywords=[${matchedKeywords}]`);
+
+      const cta = detectPostCTA(postText);
+      if (!cta.commentInterested && !cta.askEmailInComment && !cta.askPortfolioInComment && !cta.sendEmail) {
+        continue;
+      }
+      ctaCount += 1;
+      postAgentLog(`Relevant CTA post found. Taking action...`);
+
+      const profile = await getStoredUserEmail();
+      const commentText = getCommentTextForPost(postText, cta, profile);
+
+      if (!commentText) {
+        postAgentLog('Relevant post found but no valid comment text could be generated.', true);
+      } else {
+        const commented = await commentOnPost(post, commentText);
+        postAgentLog(commented ? `Commented: ${commentText}` : 'Could not post comment on this post', !commented);
+        if (commented) actedCount += 1;
+      }
+
+      await sleep(1200);
+    }
+
+    if (!postAgentRunning) break;
+
+    postAgentLog(`Scan summary: new=${scanned}, relevant=${relevantCount}, cta=${ctaCount}, actions=${actedCount}`);
+
+    await smoothScroll(1000);
+    await sleep(2000);
+  }
+
+  postAgentLog('Post outreach loop stopped.');
 }
 
 async function getAuth() {
@@ -511,6 +826,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   if (message.action === 'stop') {
     isRunning = false;
+    postAgentRunning = false;
+    postAgentLog('Stop received. All automations halted.');
+    sendResponse({ success: true });
+  }
+
+  if (message.action === 'start_post_agent') {
+    postAgentJobTitle = (message.jobTitle || '').trim();
+    postAgentKeywords = parseKeywords(message.keywords || '');
+    postAgentRunning = true;
+    processedPostKeys.clear();
+    runPostAgentLoop();
+    sendResponse({ success: true });
+  }
+
+  if (message.action === 'stop_post_agent') {
+    postAgentRunning = false;
+    postAgentLog('Post outreach stopped by user.');
     sendResponse({ success: true });
   }
   
