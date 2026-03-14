@@ -36,14 +36,19 @@ function getClientUrl(host?: string) {
 router.get('/google', async (req, res) => {
   const requestHost = (req.headers['x-forwarded-host'] as string) || req.get('host') || '';
   const telegramId = req.query.telegram_id as string;
+  const isTelegramAuth = !!telegramId;
   if (telegramId) {
     res.cookie('telegram_auth_id', telegramId, { maxAge: 10 * 60 * 1000, httpOnly: true, secure: true, sameSite: 'none' });
   }
 
+  const redirectTarget = isTelegramAuth
+    ? `${getAppUrl(requestHost)}/auth/callback`
+    : `${getClientUrl(requestHost)}/auth/success`;
+
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      redirectTo: `${getAppUrl(requestHost)}/auth/callback`,
+      redirectTo: redirectTarget,
       scopes: 'openid email profile',
     },
   });
