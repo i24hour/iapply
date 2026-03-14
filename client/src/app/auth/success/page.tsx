@@ -12,10 +12,10 @@ export default function AuthSuccessPage() {
 
   useEffect(() => {
     const handleAuthSuccess = async () => {
-      // Token comes in the URL hash: /auth/success#token=xxx
+      // Supabase token can come as access_token (standard) or token (legacy)
       const hash = window.location.hash;
       const params = new URLSearchParams(hash.replace('#', ''));
-      const token = params.get('token');
+      const token = params.get('access_token') || params.get('token');
 
       if (!token) {
         router.replace('/login');
