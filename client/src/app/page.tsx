@@ -26,17 +26,12 @@ export default function HomePage() {
                   Dashboard
                 </Link>
               ) : (
-                <>
-                  <Link href="/login" className="text-gray-600 hover:text-gray-900">
-                    Sign In
-                  </Link>
-                  <Link
-                    href="/signup"
-                    className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition"
-                  >
-                    Get Started
-                  </Link>
-                </>
+                <Link
+                  href="/signup"
+                  className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition"
+                >
+                  Get Started
+                </Link>
               )}
             </nav>
           </div>
