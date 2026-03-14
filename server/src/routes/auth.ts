@@ -5,7 +5,12 @@ import { authenticate, AuthRequest } from '../middleware/auth.js';
 const router = Router();
 
 // ─── Google OAuth: redirect to Google via Supabase ───────────────────────────
-router.get('/google', async (_req, res) => {
+router.get('/google', async (req, res) => {
+  const telegramId = req.query.telegram_id as string;
+  if (telegramId) {
+    res.cookie('telegram_auth_id', telegramId, { maxAge: 10 * 60 * 1000, httpOnly: true, secure: true, sameSite: 'none' });
+  }
+
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
@@ -24,6 +29,7 @@ router.get('/google', async (_req, res) => {
 // ─── Google OAuth: callback from Google ──────────────────────────────────────
 router.get('/callback', async (req, res) => {
   const code = req.query.code as string;
+  const telegramId = req.cookies.telegram_auth_id;
 
   if (!code) {
     return res.status(400).send('Missing OAuth code');
@@ -45,8 +51,19 @@ router.get('/callback', async (req, res) => {
       full_name: user.user_metadata?.full_name,
       avatar_url: user.user_metadata?.avatar_url,
     });
+    
+    // Auto-link Telegram if we started the flow from there
+    if (telegramId) {
+      const { linkTelegramUser } = await import('../lib/supabase.js');
+      await linkTelegramUser(user.id, parseInt(telegramId));
+    }
   } catch (e) {
-    console.error('Failed to upsert user in DB:', e);
+    console.error('Failed to upsert user or link telegram in DB:', e);
+  }
+
+  if (telegramId) {
+    res.clearCookie('telegram_auth_id');
+    return res.redirect('tg://resolve?domain=infiniteapplybot&start=success');
   }
 
   // Redirect back to extension or return token in URL hash

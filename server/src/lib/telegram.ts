@@ -16,57 +16,28 @@ export function startTelegramBot(token: string) {
   console.log('🤖 Telegram Bot started! Send /help to your bot.');
 
   // /start command
-  bot.onText(/\/start$/, (msg) => {
-    bot!.sendMessage(msg.chat.id,
-      `🚀 *iApply Agent Bot*\n\n` +
-      `Welcome! To get started, you need to link your account first.\n\n` +
-      `*Steps:*\n` +
-      `1. Sign in at ${process.env.APP_URL || 'your iApply website'}\n` +
-      `2. Copy your API token from Settings\n` +
-      `3. Send \`/link YOUR_TOKEN\` here\n\n` +
-      `After linking, you can use:\n` +
-      `▸ /apply <job query> — Start applying\n` +
-      `▸ /stop — Stop the agent\n` +
-      `▸ /status — Check status\n` +
-      `▸ /screenshot — Live screenshot`,
-      { parse_mode: 'Markdown' }
-    ).catch(console.error);
-  });
+  bot.onText(/\/start(.*)/, (msg, match) => {
+    const param = match![1].trim();
 
-  // /link command — links Telegram chat ID to user account using their JWT
-  bot.onText(/\/link (.+)/, async (msg, match) => {
-    const token = match![1].trim();
-    if (!token) {
-      bot!.sendMessage(msg.chat.id, '❌ Please provide your token.\nUsage: `/link YOUR_TOKEN`', { parse_mode: 'Markdown' }).catch(console.error);
+    if (param === 'success') {
+      bot!.sendMessage(msg.chat.id,
+        `🎉 *Authentication Successful!*\n\n` +
+        `Welcome to iApply! Your account is now securely linked.\n` +
+        `You can now control your agent. Try: \`/apply Software Engineer\``,
+        { parse_mode: 'Markdown' }
+      ).catch(console.error);
+      authorizedChatId = msg.chat.id;
       return;
     }
 
-    try {
-      // Verify the token against Supabase
-      const { data, error } = await supabase.auth.getUser(token);
-      if (error || !data.user) {
-        bot!.sendMessage(msg.chat.id, '❌ Invalid or expired token. Please sign in again and copy a fresh token.').catch(console.error);
-        return;
-      }
-
-      const user = data.user;
-      // Save telegram_chat_id to the user's DB row
-      await linkTelegramUser(user.id, msg.chat.id);
-
-      // Set the authorized chat ID for live log forwarding
-      authorizedChatId = msg.chat.id;
-
-      bot!.sendMessage(msg.chat.id,
-        `✅ *Account Linked!*\n\n` +
-        `Email: \`${user.email}\`\n\n` +
-        `You can now control your iApply agent from here!\n` +
-        `Try: /apply product manager`,
-        { parse_mode: 'Markdown' }
-      ).catch(console.error);
-    } catch (e: any) {
-      console.error('Link error:', e);
-      bot!.sendMessage(msg.chat.id, '⚠️ Failed to link account. Please try again.').catch(console.error);
-    }
+    const authUrl = `${process.env.APP_URL || 'https://iapply-telegram-bot.onrender.com'}/auth/google?telegram_id=${msg.chat.id}`;
+    bot!.sendMessage(msg.chat.id,
+      `🚀 *iApply Agent Bot*\n\n` +
+      `Welcome! To get started, you need to authenticate securely.\n\n` +
+      `[👉 Click Here to Sign In](${authUrl})\n\n` +
+      `After signing in, you'll be automatically redirected back here!`,
+      { parse_mode: 'Markdown', disable_web_page_preview: true }
+    ).catch(console.error);
   });
 
   // Helper: check if this chat ID is authorized
@@ -82,7 +53,8 @@ export function startTelegramBot(token: string) {
   // /apply command — starts the agent
   bot.onText(/\/apply (.+)/, async (msg, match) => {
     if (!await isAuthorized(msg.chat.id)) {
-      bot!.sendMessage(msg.chat.id, '🔒 You need to link your account first.\nSend: `/link YOUR_TOKEN`', { parse_mode: 'Markdown' }).catch(console.error);
+      const authUrl = `${process.env.APP_URL || 'https://iapply-telegram-bot.onrender.com'}/auth/google?telegram_id=${msg.chat.id}`;
+      bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
       return;
     }
 
@@ -114,7 +86,8 @@ export function startTelegramBot(token: string) {
   // /stop command
   bot.onText(/\/stop/, async (msg) => {
     if (!await isAuthorized(msg.chat.id)) {
-      bot!.sendMessage(msg.chat.id, '🔒 Please link your account first with `/link YOUR_TOKEN`', { parse_mode: 'Markdown' }).catch(console.error);
+      const authUrl = `${process.env.APP_URL || 'https://iapply-telegram-bot.onrender.com'}/auth/google?telegram_id=${msg.chat.id}`;
+      bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
       return;
     }
 
@@ -171,7 +144,6 @@ export function startTelegramBot(token: string) {
   bot.onText(/\/help/, (msg) => {
     bot!.sendMessage(msg.chat.id,
       `🤖 *iApply Bot Commands:*\n\n` +
-      `▸ /link <token> — Link your iApply account\n` +
       `▸ /apply <query> — Start job search & auto-apply\n` +
       `▸ /stop — Stop the running agent\n` +
       `▸ /screenshot — Capture Chrome browser window\n` +
@@ -189,9 +161,10 @@ export function startTelegramBot(token: string) {
 
     const authorized = await isAuthorized(msg.chat.id);
     if (!authorized) {
+      const authUrl = `${process.env.APP_URL || 'https://iapply-telegram-bot.onrender.com'}/auth/google?telegram_id=${msg.chat.id}`;
       bot!.sendMessage(msg.chat.id,
-        '🔒 Please link your account first!\n\nSend `/link YOUR_TOKEN` to get started.',
-        { parse_mode: 'Markdown' }
+        `🔒 Please sign in first!\n\n[👉 Click Here to Sign In](${authUrl})`,
+        { parse_mode: 'Markdown', disable_web_page_preview: true }
       ).catch(console.error);
       return;
     }

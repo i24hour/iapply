@@ -11,6 +11,7 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 // import { connectDB } from './lib/mongodb.js'; // disabled for local dev (no DB needed)
 import { errorHandler } from './middleware/error-handler.js';
 import authRouter from './routes/auth.js';
@@ -28,6 +29,7 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors({ origin: process.env.CLIENT_URL || '*', credentials: true }));
 app.use(express.json({ limit: '10mb' }));
+app.use(cookieParser());
 app.use('/uploads', express.static('uploads'));
 
 app.use('/auth', authRouter);
