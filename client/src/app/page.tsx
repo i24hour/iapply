@@ -27,7 +27,7 @@ export default function HomePage() {
                 </Link>
               ) : (
                 <Link
-                  href="/signup"
+                  href="/login"
                   className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition"
                 >
                   Get Started
@@ -48,7 +48,7 @@ export default function HomePage() {
             Upload your resume, set your preferences, and let AI apply to hundreds of jobs while you focus on what matters.
           </p>
           <Link
-            href="/signup"
+            href="/login"
             className="inline-flex items-center gap-2 bg-primary-600 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-primary-700 transition"
           >
             Start Applying Now
@@ -91,7 +91,7 @@ export default function HomePage() {
             Join thousands of job seekers who have automated their application process.
           </p>
           <Link
-            href="/signup"
+            href="/login"
             className="inline-flex items-center gap-2 bg-white text-primary-600 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-gray-100 transition"
           >
             Get Started Free
