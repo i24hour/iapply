@@ -10,7 +10,15 @@ services:
         value: 3001
       - key: NODE_ENV
         value: production
+      - key: CLIENT_URL
+        value: https://iapply.onrender.com
+      - key: APP_URL
+        value: https://iapply-telegram-bot.onrender.com
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: GEMINI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
