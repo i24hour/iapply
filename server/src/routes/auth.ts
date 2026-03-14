@@ -4,19 +4,29 @@ import { authenticate, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 
-function getAppUrl() {
+function isRenderRequestHost(host?: string) {
+  return !!host && host.includes('onrender.com');
+}
+
+function getAppUrl(host?: string) {
   const configured = process.env.APP_URL?.trim();
-  if (configured) return configured;
+  const onRender = isRenderRequestHost(host);
+  if (configured && !(onRender && configured.includes('localhost'))) {
+    return configured;
+  }
+  if (onRender) return 'https://iapply-telegram-bot.onrender.com';
   return process.env.NODE_ENV === 'production'
     ? 'https://iapply-telegram-bot.onrender.com'
     : 'http://localhost:3001';
 }
 
-function getClientUrl() {
+function getClientUrl(host?: string) {
   const configured = process.env.CLIENT_URL?.trim();
-  if (configured && !(process.env.NODE_ENV === 'production' && configured.includes('localhost'))) {
+  const onRender = isRenderRequestHost(host);
+  if (configured && !(onRender && configured.includes('localhost'))) {
     return configured;
   }
+  if (onRender) return 'https://iapply.onrender.com';
   return process.env.NODE_ENV === 'production'
     ? 'https://iapply.onrender.com'
     : 'http://localhost:3000';
@@ -24,6 +34,7 @@ function getClientUrl() {
 
 // ─── Google OAuth: redirect to Google via Supabase ───────────────────────────
 router.get('/google', async (req, res) => {
+  const requestHost = (req.headers['x-forwarded-host'] as string) || req.get('host') || '';
   const telegramId = req.query.telegram_id as string;
   if (telegramId) {
     res.cookie('telegram_auth_id', telegramId, { maxAge: 10 * 60 * 1000, httpOnly: true, secure: true, sameSite: 'none' });
@@ -32,7 +43,7 @@ router.get('/google', async (req, res) => {
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      redirectTo: `${getAppUrl()}/auth/callback`,
+      redirectTo: `${getAppUrl(requestHost)}/auth/callback`,
       scopes: 'openid email profile',
     },
   });
@@ -46,6 +57,7 @@ router.get('/google', async (req, res) => {
 
 // ─── Google OAuth: callback from Google ──────────────────────────────────────
 router.get('/callback', async (req, res) => {
+  const requestHost = (req.headers['x-forwarded-host'] as string) || req.get('host') || '';
   const code = req.query.code as string;
   const telegramId = req.cookies.telegram_auth_id;
 
@@ -85,8 +97,8 @@ router.get('/callback', async (req, res) => {
   }
 
   // Redirect back to extension or return token in URL hash
-  const redirectUrl = `${getClientUrl()}/auth/success#token=${session.access_token}`;
-  console.log('[auth] OAuth callback redirecting to:', redirectUrl);
+  const redirectUrl = `${getClientUrl(requestHost)}/auth/success#token=${session.access_token}`;
+  console.log('[auth] OAuth callback host:', requestHost, 'redirecting to:', redirectUrl);
   res.redirect(redirectUrl);
 });
 
