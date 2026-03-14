@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: iapply-frontend
+    env: node
+    region: oregon
+    rootDir: client
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://iapply-telegram-bot.onrender.com
