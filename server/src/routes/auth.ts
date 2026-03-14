@@ -59,10 +59,18 @@ router.get('/google', async (req, res) => {
 router.get('/callback', async (req, res) => {
   const requestHost = (req.headers['x-forwarded-host'] as string) || req.get('host') || '';
   const code = req.query.code as string;
+  const oauthError = req.query.error as string | undefined;
+  const oauthErrorDescription = req.query.error_description as string | undefined;
   const telegramId = req.cookies.telegram_auth_id;
 
   if (!code) {
-    return res.status(400).send('Missing OAuth code');
+    const loginUrl = `${getClientUrl(requestHost)}/login`;
+    if (oauthError) {
+      const query = new URLSearchParams({ oauth: 'failed', reason: oauthError });
+      if (oauthErrorDescription) query.set('message', oauthErrorDescription);
+      return res.redirect(`${loginUrl}?${query.toString()}`);
+    }
+    return res.redirect(`${loginUrl}?oauth=retry`);
   }
 
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
