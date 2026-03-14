@@ -41,9 +41,7 @@ router.get('/google', async (req, res) => {
     res.cookie('telegram_auth_id', telegramId, { maxAge: 10 * 60 * 1000, httpOnly: true, secure: true, sameSite: 'none' });
   }
 
-  const redirectTarget = isTelegramAuth
-    ? `${getAppUrl(requestHost)}/auth/callback`
-    : `${getClientUrl(requestHost)}/auth/success`;
+  const redirectTarget = `${getAppUrl(requestHost)}/auth/callback`;
 
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
@@ -109,8 +107,8 @@ router.get('/callback', async (req, res) => {
     return res.redirect('tg://resolve?domain=infiniteapplybot&start=success');
   }
 
-  // Redirect back to extension or return token in URL hash
-  const redirectUrl = `${getClientUrl(requestHost)}/auth/success#token=${session.access_token}`;
+  // Redirect to frontend auth success page with session tokens in the URL hash
+  const redirectUrl = `${getClientUrl(requestHost)}/auth/success#access_token=${session.access_token}&refresh_token=${session.refresh_token}&token=${session.access_token}`;
   console.log('[auth] OAuth callback host:', requestHost, 'redirecting to:', redirectUrl);
   res.redirect(redirectUrl);
 });

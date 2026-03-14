@@ -40,7 +40,7 @@ export default function AuthSuccessPage() {
           },
           token
         );
-        router.replace('/');
+      router.replace('/dashboard');
       } catch {
         localStorage.removeItem('auth_token');
         router.replace('/login');
