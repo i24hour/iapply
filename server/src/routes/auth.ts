@@ -4,6 +4,24 @@ import { authenticate, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 
+function getAppUrl() {
+  const configured = process.env.APP_URL?.trim();
+  if (configured) return configured;
+  return process.env.NODE_ENV === 'production'
+    ? 'https://iapply-telegram-bot.onrender.com'
+    : 'http://localhost:3001';
+}
+
+function getClientUrl() {
+  const configured = process.env.CLIENT_URL?.trim();
+  if (configured && !(process.env.NODE_ENV === 'production' && configured.includes('localhost'))) {
+    return configured;
+  }
+  return process.env.NODE_ENV === 'production'
+    ? 'https://iapply.onrender.com'
+    : 'http://localhost:3000';
+}
+
 // ─── Google OAuth: redirect to Google via Supabase ───────────────────────────
 router.get('/google', async (req, res) => {
   const telegramId = req.query.telegram_id as string;
@@ -14,7 +32,7 @@ router.get('/google', async (req, res) => {
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      redirectTo: `${process.env.APP_URL}/auth/callback`,
+      redirectTo: `${getAppUrl()}/auth/callback`,
       scopes: 'openid email profile',
     },
   });
@@ -67,7 +85,8 @@ router.get('/callback', async (req, res) => {
   }
 
   // Redirect back to extension or return token in URL hash
-  const redirectUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/auth/success#token=${session.access_token}`;
+  const redirectUrl = `${getClientUrl()}/auth/success#token=${session.access_token}`;
+  console.log('[auth] OAuth callback redirecting to:', redirectUrl);
   res.redirect(redirectUrl);
 });
 
