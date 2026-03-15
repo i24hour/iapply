@@ -104,7 +104,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-3xl">
       <h1 className="text-2xl font-bold text-gray-900 mb-2">Profile</h1>
       <p className="text-gray-600 mb-8">
         Your profile information is used to fill out job applications.
@@ -112,10 +112,10 @@ export default function ProfilePage() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Basic Info */}
-        <div className="bg-white border rounded-xl p-6 space-y-4">
+        <div className="bg-white border rounded-xl p-4 sm:p-6 space-y-4">
           <h2 className="font-semibold text-gray-900">Basic Information</h2>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Full Name
@@ -170,10 +170,10 @@ export default function ProfilePage() {
         </div>
 
         {/* Skills */}
-        <div className="bg-white border rounded-xl p-6 space-y-4">
+        <div className="bg-white border rounded-xl p-4 sm:p-6 space-y-4">
           <h2 className="font-semibold text-gray-900">Skills</h2>
 
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <input
               type="text"
               value={skillInput}
@@ -185,7 +185,7 @@ export default function ProfilePage() {
             <button
               type="button"
               onClick={addSkill}
-              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition sm:w-auto"
             >
               Add
             </button>
@@ -211,10 +211,10 @@ export default function ProfilePage() {
         </div>
 
         {/* Preferred Roles */}
-        <div className="bg-white border rounded-xl p-6 space-y-4">
+        <div className="bg-white border rounded-xl p-4 sm:p-6 space-y-4">
           <h2 className="font-semibold text-gray-900">Preferred Roles</h2>
 
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <input
               type="text"
               value={roleInput}
@@ -226,7 +226,7 @@ export default function ProfilePage() {
             <button
               type="button"
               onClick={addRole}
-              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition sm:w-auto"
             >
               Add
             </button>
@@ -255,7 +255,7 @@ export default function ProfilePage() {
         <button
           type="submit"
           disabled={isSaving}
-          className="flex items-center gap-2 bg-primary-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-primary-700 transition disabled:opacity-50"
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-6 py-3 font-medium text-white transition hover:bg-primary-700 disabled:opacity-50 sm:w-auto"
         >
           {isSaving ? (
             <>

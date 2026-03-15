@@ -16,13 +16,13 @@ const colorClasses = {
 
 export function StatsCard({ title, value, icon, color }: StatsCardProps) {
   return (
-    <div className={cn('rounded-xl border p-6', colorClasses[color])}>
+    <div className={cn('rounded-xl border p-4 sm:p-6', colorClasses[color])}>
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm text-gray-600">{title}</p>
-          <p className="text-3xl font-bold mt-1">{value}</p>
+          <p className="mt-1 text-2xl font-bold sm:text-3xl">{value}</p>
         </div>
-        <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm sm:h-12 sm:w-12">
           {icon}
         </div>
       </div>

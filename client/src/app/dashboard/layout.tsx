@@ -13,8 +13,9 @@ import {
   FileText,
   Settings,
   LogOut,
-  Zap,
   ClipboardList,
+  Menu,
+  X,
 } from 'lucide-react';
 
 const navigation = [
@@ -34,6 +35,7 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const { user, isAuthenticated, logout } = useAuthStore();
   const [hydrated, setHydrated] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     setHydrated(true);
@@ -45,6 +47,10 @@ export default function DashboardLayout({
     }
   }, [hydrated, isAuthenticated, router]);
 
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [pathname]);
+
   const handleLogout = () => {
     logout();
     router.push('/');
@@ -52,74 +58,98 @@ export default function DashboardLayout({
 
   if (!hydrated || !isAuthenticated) {
     return (
-      <div style={{ padding: '50px', fontSize: '20px', fontFamily: 'monospace' }}>
-        <p>Dashboard Loading Debug:</p>
-        <p>hydrated: {String(hydrated)}</p>
-        <p>isAuthenticated: {String(isAuthenticated)}</p>
-        <p>user: {user ? user.email : 'null'}</p>
-        <p>token in localStorage: {typeof window !== 'undefined' ? String(!!localStorage.getItem('auth_token')) : 'SSR'}</p>
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 px-6">
+        <div className="rounded-xl border bg-white px-6 py-4 text-sm text-gray-600 shadow-sm">
+          Loading dashboard...
+        </div>
       </div>
     );
   }
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Sidebar */}
-      <aside className="fixed inset-y-0 left-0 w-64 bg-white border-r">
-        <div className="flex flex-col h-full">
-          {/* Logo */}
-          <div className="flex items-center gap-2 px-6 py-4 border-b">
-            <Briefcase className="h-8 w-8 text-primary-600" />
-            <span className="text-xl font-bold">JobAuto</span>
-          </div>
+  const SidebarContent = () => (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-2 border-b px-5 py-4 sm:px-6">
+        <Briefcase className="h-8 w-8 text-primary-600" />
+        <span className="text-xl font-bold">JobAuto</span>
+      </div>
 
-          {/* Navigation */}
-          <nav className="flex-1 px-4 py-6 space-y-1">
-            {navigation.map((item) => {
-              const isActive = pathname === item.href;
-              return (
-                <Link
-                  key={item.name}
-                  href={item.href}
-                  className={cn(
-                    'flex items-center gap-3 px-4 py-3 rounded-lg transition',
-                    isActive
-                      ? 'bg-primary-50 text-primary-600'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  )}
-                >
-                  <item.icon className="h-5 w-5" />
-                  {item.name}
-                </Link>
-              );
-            })}
-          </nav>
-
-          {/* User section */}
-          <div className="border-t p-4">
-            <div className="flex items-center gap-3 px-4 py-2">
-              <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center">
-                <User className="h-5 w-5 text-primary-600" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">
-                  {user?.email}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-3 w-full px-4 py-3 mt-2 text-gray-600 hover:bg-gray-50 rounded-lg transition"
+      <nav className="flex-1 space-y-1 px-3 py-5 sm:px-4 sm:py-6">
+        {navigation.map((item) => {
+          const isActive = pathname === item.href;
+          return (
+            <Link
+              key={item.name}
+              href={item.href}
+              className={cn(
+                'flex items-center gap-3 rounded-lg px-4 py-3 transition',
+                isActive ? 'bg-primary-50 text-primary-600' : 'text-gray-600 hover:bg-gray-50'
+              )}
             >
-              <LogOut className="h-5 w-5" />
-              Sign out
-            </button>
+              <item.icon className="h-5 w-5" />
+              {item.name}
+            </Link>
+          );
+        })}
+      </nav>
+
+      <div className="border-t p-4">
+        <div className="flex items-center gap-3 px-3 py-2 sm:px-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-100">
+            <User className="h-5 w-5 text-primary-600" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-gray-900">{user?.email}</p>
           </div>
         </div>
+        <button
+          onClick={handleLogout}
+          className="mt-2 flex w-full items-center gap-3 rounded-lg px-3 py-3 text-gray-600 transition hover:bg-gray-50 sm:px-4"
+        >
+          <LogOut className="h-5 w-5" />
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur md:hidden">
+        <div className="flex items-center justify-between px-4 py-3">
+          <Link href="/dashboard" className="flex items-center gap-2">
+            <Briefcase className="h-7 w-7 text-primary-600" />
+            <span className="text-lg font-bold">JobAuto</span>
+          </Link>
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen((open) => !open)}
+            className="rounded-lg border border-gray-200 p-2 text-gray-600 transition hover:bg-gray-50"
+            aria-label={mobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          >
+            {mobileNavOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+        </div>
+      </header>
+
+      {mobileNavOpen && (
+        <>
+          <button
+            type="button"
+            aria-label="Close navigation overlay"
+            onClick={() => setMobileNavOpen(false)}
+            className="fixed inset-0 z-40 bg-gray-900/40 md:hidden"
+          />
+          <aside className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] border-r bg-white shadow-xl md:hidden">
+            <SidebarContent />
+          </aside>
+        </>
+      )}
+
+      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r bg-white md:block">
+        <SidebarContent />
       </aside>
 
-      {/* Main content */}
-      <main className="ml-64 p-8">{children}</main>
+      <main className="px-4 py-4 sm:px-6 sm:py-6 md:ml-64 md:p-8">{children}</main>
     </div>
   );
 }

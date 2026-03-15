@@ -104,7 +104,7 @@ export default function PreferencesPage() {
   }
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-3xl">
       <h1 className="text-2xl font-bold text-gray-900 mb-2">Job Preferences</h1>
       <p className="text-gray-600 mb-8">
         Set your job search preferences to match with relevant opportunities.
@@ -112,11 +112,11 @@ export default function PreferencesPage() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Target Roles */}
-        <div className="bg-white border rounded-xl p-6 space-y-4">
+        <div className="bg-white border rounded-xl p-4 sm:p-6 space-y-4">
           <h2 className="font-semibold text-gray-900">Target Roles</h2>
           <p className="text-sm text-gray-600">What job titles are you looking for?</p>
 
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <input
               type="text"
               value={roleInput}
@@ -128,7 +128,7 @@ export default function PreferencesPage() {
             <button
               type="button"
               onClick={addRole}
-              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition sm:w-auto"
             >
               Add
             </button>
@@ -154,11 +154,11 @@ export default function PreferencesPage() {
         </div>
 
         {/* Locations */}
-        <div className="bg-white border rounded-xl p-6 space-y-4">
+        <div className="bg-white border rounded-xl p-4 sm:p-6 space-y-4">
           <h2 className="font-semibold text-gray-900">Locations</h2>
           <p className="text-sm text-gray-600">Where do you want to work?</p>
 
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <input
               type="text"
               value={locationInput}
@@ -170,7 +170,7 @@ export default function PreferencesPage() {
             <button
               type="button"
               onClick={addLocation}
-              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition sm:w-auto"
             >
               Add
             </button>
@@ -206,7 +206,7 @@ export default function PreferencesPage() {
         </div>
 
         {/* Job Type & Experience */}
-        <div className="bg-white border rounded-xl p-6 space-y-4">
+        <div className="bg-white border rounded-xl p-4 sm:p-6 space-y-4">
           <h2 className="font-semibold text-gray-900">Job Type & Experience</h2>
 
           <div>
@@ -246,11 +246,11 @@ export default function PreferencesPage() {
         </div>
 
         {/* Salary Range */}
-        <div className="bg-white border rounded-xl p-6 space-y-4">
+        <div className="bg-white border rounded-xl p-4 sm:p-6 space-y-4">
           <h2 className="font-semibold text-gray-900">Salary Expectations (Optional)</h2>
           <p className="text-sm text-gray-600">Annual salary in your preferred currency</p>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Minimum</label>
               <input
@@ -280,7 +280,7 @@ export default function PreferencesPage() {
         <button
           type="submit"
           disabled={isSaving}
-          className="flex items-center gap-2 bg-primary-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-primary-700 transition disabled:opacity-50"
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-6 py-3 font-medium text-white transition hover:bg-primary-700 disabled:opacity-50 sm:w-auto"
         >
           {isSaving ? (
             <>

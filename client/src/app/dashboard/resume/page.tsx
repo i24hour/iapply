@@ -56,7 +56,7 @@ export default function ResumePage() {
       {/* Upload Area */}
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition ${
+        className={`cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition sm:p-8 ${
           isDragActive
             ? 'border-primary-500 bg-primary-50'
             : 'border-gray-300 hover:border-gray-400'
@@ -75,7 +75,7 @@ export default function ResumePage() {
 
       {/* Selected File */}
       {selectedFile && (
-        <div className="mt-4 p-4 bg-gray-50 rounded-lg flex items-center justify-between">
+        <div className="mt-4 flex flex-col gap-4 rounded-lg bg-gray-50 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <FileText className="h-8 w-8 text-primary-600" />
             <div>
@@ -83,7 +83,7 @@ export default function ResumePage() {
               <p className="text-sm text-gray-600">{formatFileSize(selectedFile.size)}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-end gap-2">
             <button
               onClick={() => setSelectedFile(null)}
               className="p-2 text-gray-400 hover:text-gray-600"
@@ -112,13 +112,13 @@ export default function ResumePage() {
       {resume && (
         <div className="mt-8">
           <h2 className="text-lg font-semibold mb-4">Current Resume</h2>
-          <div className="bg-white border rounded-xl p-6">
-            <div className="flex items-center gap-4 mb-6">
-              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+          <div className="rounded-xl border bg-white p-4 sm:p-6">
+            <div className="mb-6 flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
                 <CheckCircle className="h-6 w-6 text-green-600" />
               </div>
-              <div>
-                <p className="font-medium">{resume.fileName}</p>
+              <div className="min-w-0">
+                <p className="truncate font-medium">{resume.fileName}</p>
                 <p className="text-sm text-gray-600">
                   Uploaded on {new Date(resume.uploadedAt).toLocaleDateString()}
                 </p>
@@ -129,7 +129,7 @@ export default function ResumePage() {
               <div className="space-y-4">
                 <h3 className="font-medium text-gray-900">Extracted Information</h3>
                 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <p className="text-sm text-gray-600">Name</p>
                     <p className="font-medium">{resume.parsedData.fullName}</p>

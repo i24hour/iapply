@@ -29,7 +29,7 @@ export function QuickSetup({ hasResume, hasProfile }: QuickSetupProps) {
   if (allCompleted) return null;
 
   return (
-    <div className="bg-primary-50 border border-primary-200 rounded-xl p-6">
+    <div className="rounded-xl border border-primary-200 bg-primary-50 p-4 sm:p-6">
       <h2 className="text-lg font-semibold text-primary-900 mb-2">
         Complete Your Setup
       </h2>
@@ -42,13 +42,13 @@ export function QuickSetup({ hasResume, hasProfile }: QuickSetupProps) {
           <Link
             key={step.name}
             href={step.href}
-            className={`flex items-center justify-between p-4 rounded-lg transition ${
+            className={`flex flex-col items-start gap-3 rounded-lg p-4 transition sm:flex-row sm:items-center sm:justify-between ${
               step.completed
                 ? 'bg-green-50 border border-green-200'
                 : 'bg-white border border-primary-200 hover:border-primary-400'
             }`}
           >
-            <div className="flex items-center gap-4">
+            <div className="flex items-start gap-4">
               <div
                 className={`w-10 h-10 rounded-full flex items-center justify-center ${
                   step.completed
@@ -66,7 +66,7 @@ export function QuickSetup({ hasResume, hasProfile }: QuickSetupProps) {
             {step.completed ? (
               <span className="text-green-600 text-sm font-medium">Complete</span>
             ) : (
-              <ArrowRight className="h-5 w-5 text-primary-600" />
+              <ArrowRight className="h-5 w-5 text-primary-600 self-end sm:self-auto" />
             )}
           </Link>
         ))}

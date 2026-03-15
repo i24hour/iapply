@@ -373,7 +373,7 @@ export function ChatBot() {
   const showQuickActions = messages.length <= 1;
 
   return (
-    <div className="bg-white rounded-xl border flex flex-col h-[500px] md:h-[600px] max-h-[calc(100vh-120px)] md:max-h-[calc(100vh-200px)]">
+    <div className="flex min-h-[28rem] max-h-[calc(100vh-8rem)] flex-col rounded-xl border bg-white h-[70vh] md:h-[600px] md:max-h-[calc(100vh-200px)]">
       {/* Header */}
       <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b bg-gradient-to-r from-primary-50 to-white rounded-t-xl">
         <div
@@ -408,10 +408,10 @@ export function ChatBot() {
         {automationStatus.isRunning && (
           <button
             onClick={() => handleSend('stop')}
-            className="flex items-center gap-1.5 text-sm text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg transition font-medium"
+            className="flex items-center gap-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-100 sm:px-3"
           >
             <Square className="h-3.5 w-3.5" />
-            Stop
+            <span className="hidden sm:inline">Stop</span>
           </button>
         )}
       </div>
@@ -426,7 +426,7 @@ export function ChatBot() {
         {showQuickActions && !isProcessing && (
           <div className="pt-2">
             <p className="text-xs text-gray-400 mb-3 font-medium uppercase tracking-wide">Quick actions</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {quickActions.map((qa) => (
                 <button
                   key={qa.label}
@@ -479,15 +479,15 @@ export function ChatBot() {
 
       {/* Input */}
       <div className="border-t px-4 sm:px-6 py-3 sm:py-4 bg-gray-50 rounded-b-xl">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <input
             ref={inputRef}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder='Try "Apply 5 jobs based on my profile" or "Show status"...'
-            className="flex-1 border border-gray-200 rounded-full px-5 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white"
+            placeholder='Try "Apply 5 jobs" or "Show status"...'
+            className="flex-1 rounded-full border border-gray-200 bg-white px-4 py-3 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500 sm:px-5"
             disabled={isProcessing}
           />
           <button
@@ -522,7 +522,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
       <div
         className={cn(
-          'max-w-[80%] rounded-2xl px-4 py-3',
+          'max-w-[88%] rounded-2xl px-4 py-3 sm:max-w-[80%]',
           isUser ? 'bg-primary-600 text-white rounded-tr-md' : 'bg-gray-100 text-gray-800 rounded-tl-md'
         )}
       >

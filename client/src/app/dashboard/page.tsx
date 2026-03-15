@@ -63,8 +63,8 @@ export default function DashboardPage() {
   const needsSetup = !resume || !profile;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-5 sm:space-y-6">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
           <p className="text-gray-600">Chat with your job assistant to manage applications</p>
@@ -74,7 +74,7 @@ export default function DashboardPage() {
       {needsSetup && !isLoading && <QuickSetup hasResume={!!resume} hasProfile={!!profile} />}
 
       {/* Stats Strip */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatsCard
           title="Applied"
           value={automationStatus.jobsApplied}
@@ -101,7 +101,6 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Chat Bot — primary interface */}
       <ChatBot />
     </div>
   );
