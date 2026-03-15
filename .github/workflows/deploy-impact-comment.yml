@@ -1,0 +1,97 @@
+name: Deploy Impact Comment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  detect-impact:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      shared: ${{ steps.filter.outputs.shared }}
+      ai: ${{ steps.filter.outputs.ai }}
+      extension: ${{ steps.filter.outputs.extension }}
+      rootInfra: ${{ steps.filter.outputs.rootInfra }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            frontend:
+              - 'client/**'
+            backend:
+              - 'server/**'
+            shared:
+              - 'shared/**'
+            ai:
+              - 'ai-service/**'
+            extension:
+              - 'extension/**'
+            rootInfra:
+              - 'render.yaml'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig.base.json'
+
+      - name: Build deploy impact text
+        id: impact
+        run: |
+          FRONTEND="No"
+          BACKEND="No"
+
+          if [[ "${{ steps.filter.outputs.frontend }}" == "true" || "${{ steps.filter.outputs.shared }}" == "true" || "${{ steps.filter.outputs.rootInfra }}" == "true" ]]; then
+            FRONTEND="Yes"
+          fi
+
+          if [[ "${{ steps.filter.outputs.backend }}" == "true" || "${{ steps.filter.outputs.shared }}" == "true" || "${{ steps.filter.outputs.rootInfra }}" == "true" ]]; then
+            BACKEND="Yes"
+          fi
+
+          echo "frontend=$FRONTEND" >> "$GITHUB_OUTPUT"
+          echo "backend=$BACKEND" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Render Deploy Impact"
+            echo ""
+            echo "- Frontend \\`iapply\\`: **$FRONTEND**"
+            echo "- Backend \\`iapply-telegram-bot\\`: **$BACKEND**"
+            echo ""
+            echo "#### Changed Areas"
+            echo "- client/: ${{ steps.filter.outputs.frontend }}"
+            echo "- server/: ${{ steps.filter.outputs.backend }}"
+            echo "- shared/: ${{ steps.filter.outputs.shared }}"
+            echo "- ai-service/: ${{ steps.filter.outputs.ai }}"
+            echo "- extension/: ${{ steps.filter.outputs.extension }}"
+            echo "- root infra files: ${{ steps.filter.outputs.rootInfra }}"
+          } > impact.md
+
+      - name: Upload impact artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-impact
+          path: impact.md
+
+      - name: Add sticky PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: render-deploy-impact
+          path: impact.md
+
+      - name: Add job summary (push)
+        if: github.event_name == 'push'
+        run: cat impact.md >> "$GITHUB_STEP_SUMMARY"
