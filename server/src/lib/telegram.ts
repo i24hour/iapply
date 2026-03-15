@@ -1,7 +1,7 @@
 // Telegram Bot - Controls the Chrome Extension Agent remotely
 import TelegramBot from 'node-telegram-bot-api';
 import { pushCommand, onAgentLog, getAgentStatus, getRecentLogs } from './agent-commands.js';
-import { supabase, getUserByTelegramId, linkTelegramUser } from './supabase.js';
+import { getUserByTelegramId, countLinkedTelegramUsers } from './supabase.js';
 
 let bot: TelegramBot | null = null;
 let authorizedChatId: number | null = null;
@@ -9,6 +9,27 @@ let authorizedChatId: number | null = null;
 function getTelegramLoginUrl(chatId: number) {
   const clientUrl = process.env.CLIENT_URL || 'https://iapply.onrender.com';
   return `${clientUrl}/login?telegram_id=${chatId}`;
+}
+
+export async function refreshBotProfile() {
+  if (!bot) return;
+
+  try {
+    const linkedUsers = await countLinkedTelegramUsers();
+    const shortDescription =
+      linkedUsers > 0
+        ? `${linkedUsers} verified users linked`
+        : 'Link your account and control iApply from Telegram';
+    const description =
+      linkedUsers > 0
+        ? `Automate your job search with iApply. Currently ${linkedUsers} verified users have linked their Telegram accounts.`
+        : 'Automate your job search with iApply. Link your account to control your agent from Telegram.';
+
+    await bot.setMyShortDescription({ short_description: shortDescription });
+    await bot.setMyDescription({ description });
+  } catch (error) {
+    console.error('Failed to refresh bot profile metadata:', error);
+  }
 }
 
 export function startTelegramBot(token: string) {
@@ -19,6 +40,7 @@ export function startTelegramBot(token: string) {
 
   bot = new TelegramBot(token, { polling: true });
   console.log('🤖 Telegram Bot started! Send /help to your bot.');
+  refreshBotProfile().catch(console.error);
 
   // /start command
   bot.onText(/\/start(.*)/, (msg, match) => {
@@ -31,6 +53,7 @@ export function startTelegramBot(token: string) {
         `You can now control your agent. Try: \`/apply Software Engineer\``,
         { parse_mode: 'Markdown' }
       ).catch(console.error);
+      refreshBotProfile().catch(console.error);
       authorizedChatId = msg.chat.id;
       return;
     }
@@ -112,6 +135,26 @@ export function startTelegramBot(token: string) {
     bot!.sendMessage(msg.chat.id, `${emoji} Agent Status: *${status.toUpperCase()}*`, { parse_mode: 'Markdown' }).catch(console.error);
   });
 
+  bot.onText(/\/stats/, async (msg) => {
+    if (!await isAuthorized(msg.chat.id)) {
+      const authUrl = getTelegramLoginUrl(msg.chat.id);
+      bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
+      return;
+    }
+
+    try {
+      const linkedUsers = await countLinkedTelegramUsers();
+      bot!.sendMessage(
+        msg.chat.id,
+        `📊 *Bot Stats*\n\n👥 Linked users: *${linkedUsers}*`,
+        { parse_mode: 'Markdown' }
+      ).catch(console.error);
+    } catch (error) {
+      console.error('Failed to fetch bot stats:', error);
+      bot!.sendMessage(msg.chat.id, '⚠️ Could not load bot stats right now.').catch(console.error);
+    }
+  });
+
   // /logs command
   bot.onText(/\/logs/, async (msg) => {
     if (!await isAuthorized(msg.chat.id)) {
@@ -153,6 +196,7 @@ export function startTelegramBot(token: string) {
       `▸ /stop — Stop the running agent\n` +
       `▸ /screenshot — Capture Chrome browser window\n` +
       `▸ /status — Check if agent is running\n` +
+      `▸ /stats — Show linked user count\n` +
       `▸ /logs — View last 10 log entries\n` +
       `▸ /help — Show this help message`,
       { parse_mode: 'Markdown' }

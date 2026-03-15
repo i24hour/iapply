@@ -63,6 +63,16 @@ export async function linkTelegramUser(userId: string, telegramChatId: number) {
   if (error) throw error;
 }
 
+export async function countLinkedTelegramUsers() {
+  const { count, error } = await supabase
+    .from('users')
+    .select('id', { count: 'exact', head: true })
+    .not('telegram_chat_id', 'is', null);
+
+  if (error) throw error;
+  return count || 0;
+}
+
 // ─── Helper: verify a JWT and return the user ────────────────────────────────
 export async function verifyAndGetUser(token: string) {
   const { data, error } = await supabase.auth.getUser(token);

@@ -112,6 +112,8 @@ router.get('/callback', async (req, res) => {
     if (telegramId) {
       const { linkTelegramUser } = await import('../lib/supabase.js');
       await linkTelegramUser(user.id, parseInt(telegramId));
+      const { refreshBotProfile } = await import('../lib/telegram.js');
+      await refreshBotProfile();
     }
   } catch (e) {
     console.error('Failed to upsert user or link telegram in DB:', e);
@@ -163,6 +165,8 @@ router.post('/link-telegram', authenticate, async (req: AuthRequest, res) => {
   try {
     const { linkTelegramUser } = await import('../lib/supabase.js');
     await linkTelegramUser(req.userId, telegramId);
+    const { refreshBotProfile } = await import('../lib/telegram.js');
+    await refreshBotProfile();
 
     res.json({
       success: true,
