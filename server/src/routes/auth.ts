@@ -50,12 +50,13 @@ router.get('/google', async (req, res) => {
   const requestHost = (req.headers['x-forwarded-host'] as string) || req.get('host') || '';
   const telegramId = req.query.telegram_id as string;
   const isTelegramAuth = !!telegramId;
+  console.log('[auth/google]', { requestHost, telegramId, isTelegramAuth });
   if (telegramId) {
     res.cookie('telegram_auth_id', telegramId, { maxAge: 10 * 60 * 1000, httpOnly: true, secure: true, sameSite: 'none' });
   }
 
   const redirectTarget = isTelegramAuth
-    ? `${getAppUrl(requestHost)}/auth/callback`
+    ? `${getAppUrl(requestHost)}/auth/callback?telegram_id=${encodeURIComponent(telegramId)}`
     : `${getClientUrl(requestHost)}/auth/success`;
 
   const { data, error } = await supabase.auth.signInWithOAuth({
@@ -79,16 +80,25 @@ router.get('/callback', async (req, res) => {
   const code = req.query.code as string;
   const oauthError = req.query.error as string | undefined;
   const oauthErrorDescription = req.query.error_description as string | undefined;
-  const telegramId = req.cookies.telegram_auth_id;
+  const telegramId = (req.query.telegram_id as string | undefined) || req.cookies.telegram_auth_id;
+  console.log('[auth/callback]', {
+    requestHost,
+    telegramIdFromQuery: req.query.telegram_id,
+    telegramIdFromCookie: req.cookies.telegram_auth_id,
+    resolvedTelegramId: telegramId,
+    hasCode: !!code,
+    oauthError,
+  });
 
   if (!code) {
     const loginUrl = `${getClientUrl(requestHost)}/login`;
+    const telegramParam = telegramId ? `&telegram_id=${encodeURIComponent(telegramId)}` : '';
     if (oauthError) {
       const query = new URLSearchParams({ oauth: 'failed', reason: oauthError });
       if (oauthErrorDescription) query.set('message', oauthErrorDescription);
-      return res.redirect(`${loginUrl}?${query.toString()}`);
+      return res.redirect(`${loginUrl}?${query.toString()}${telegramParam}`);
     }
-    return res.redirect(`${loginUrl}?oauth=retry`);
+    return res.redirect(`${loginUrl}?oauth=retry${telegramParam}`);
   }
 
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
@@ -120,7 +130,9 @@ router.get('/callback', async (req, res) => {
   }
 
   if (telegramId) {
-    res.clearCookie('telegram_auth_id');
+    if (req.cookies.telegram_auth_id) {
+      res.clearCookie('telegram_auth_id');
+    }
     const { botUsername } = getTelegramReturnLinks();
     const redirectUrl =
       `${getClientUrl(requestHost)}/auth/success?from=telegram&bot=${encodeURIComponent(botUsername)}` +
