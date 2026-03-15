@@ -48,6 +48,7 @@ npm run dev
 ```
 
 This automatically clears the Next.js cache and starts both:
+
 - **Frontend:** http://localhost:3000
 - **Backend:** http://localhost:3001
 
@@ -69,13 +70,13 @@ jobs/                 ← Run all commands from here
 
 ## Commands (run from jobs/ directory)
 
-| Command              | Description                              |
-|----------------------|------------------------------------------|
-| `npm run dev`        | Start frontend + backend together        |
-| `npm run dev:client` | Start frontend only (port 3000)          |
-| `npm run dev:server` | Start backend only (port 3001)           |
-| `npm run install:all`| Install all dependencies                 |
-| `npm run build`      | Build frontend for production            |
+| Command               | Description                       |
+| --------------------- | --------------------------------- |
+| `npm run dev`         | Start frontend + backend together |
+| `npm run dev:client`  | Start frontend only (port 3000)   |
+| `npm run dev:server`  | Start backend only (port 3001)    |
+| `npm run install:all` | Install all dependencies          |
+| `npm run build`       | Build frontend for production     |
 
 ---
 
@@ -116,33 +117,37 @@ lsof -ti:3001 | xargs kill -9
 ## API Endpoints (port 3001)
 
 ### Auth
+
 | Method | Endpoint       | Description      |
-|--------|----------------|------------------|
+| ------ | -------------- | ---------------- |
 | POST   | `/auth/signup` | Create account   |
 | POST   | `/auth/login`  | Login            |
 | GET    | `/auth/me`     | Get current user |
 
 ### Profile & Resume
-| Method | Endpoint         | Description      |
-|--------|------------------|------------------|
-| GET    | `/profile`       | Get profile      |
-| PUT    | `/profile`       | Update profile   |
-| POST   | `/resume/upload` | Upload resume    |
-| GET    | `/resume`        | Get resume       |
+
+| Method | Endpoint         | Description    |
+| ------ | ---------------- | -------------- |
+| GET    | `/profile`       | Get profile    |
+| PUT    | `/profile`       | Update profile |
+| POST   | `/resume/upload` | Upload resume  |
+| GET    | `/resume`        | Get resume     |
 
 ### Automation
-| Method | Endpoint             | Description         |
-|--------|----------------------|---------------------|
-| GET    | `/automation/status` | Get status          |
-| POST   | `/automation/start`  | Start automation    |
-| POST   | `/automation/pause`  | Pause               |
-| POST   | `/automation/stop`   | Stop                |
+
+| Method | Endpoint             | Description      |
+| ------ | -------------------- | ---------------- |
+| GET    | `/automation/status` | Get status       |
+| POST   | `/automation/start`  | Start automation |
+| POST   | `/automation/pause`  | Pause            |
+| POST   | `/automation/stop`   | Stop             |
 
 ### Applications
-| Method | Endpoint           | Description        |
-|--------|--------------------|--------------------|
-| GET    | `/applications`    | List applications  |
-| GET    | `/applications/:id`| Get details        |
+
+| Method | Endpoint            | Description       |
+| ------ | ------------------- | ----------------- |
+| GET    | `/applications`     | List applications |
+| GET    | `/applications/:id` | Get details       |
 
 ---
 
