@@ -24,22 +24,41 @@ import {
 import type { ChatMessage, Application } from '@/lib/types';
 
 type CommandCategory = 'extension' | 'local' | 'info';
+type ApplyMode = 'easy' | 'apply';
 
 interface ParsedCommand {
   action: string;
   count?: number;
   category: CommandCategory;
+  applyMode?: ApplyMode;
 }
 
 function parseCommand(text: string): ParsedCommand | null {
   const lower = text.toLowerCase().trim();
 
   // --- Extension-routed commands (apply jobs) ---
+  const easyApplyMatch = lower.match(
+    /(?:easy\s*apply|easyapply)\s*(?:to\s*|for\s*)?(\d+)?\s*(?:jobs?)?/
+  );
+  if (easyApplyMatch) {
+    return {
+      action: 'start',
+      applyMode: 'easy',
+      count: easyApplyMatch[1] ? parseInt(easyApplyMatch[1]) : 10,
+      category: 'extension',
+    };
+  }
+
   const applyMatch = lower.match(
     /(?:apply|start|begin|run)\s*(?:to\s*|for\s*)?(\d+)?\s*(?:jobs?)?(?:\s*(?:based on|using|from|with)\s*(?:my\s*)?(?:profile|resume|preferences?))?/
   );
   if (applyMatch) {
-    return { action: 'start', count: applyMatch[1] ? parseInt(applyMatch[1]) : 10, category: 'extension' };
+    return {
+      action: 'start',
+      applyMode: 'apply',
+      count: applyMatch[1] ? parseInt(applyMatch[1]) : 10,
+      category: 'extension',
+    };
   }
 
   // Pause automation → extension
@@ -123,6 +142,7 @@ function formatApplicationsResponse(apps: Application[]): string {
 }
 
 const quickActions = [
+  { label: 'Easy Apply 5 jobs', icon: Zap, command: 'easy apply 5 jobs' },
   { label: 'Apply 5 jobs', icon: Play, command: 'apply 5 jobs based on my profile' },
   { label: 'Status', icon: BarChart3, command: 'status' },
   { label: 'My applications', icon: Briefcase, command: 'show my applications' },
@@ -151,7 +171,9 @@ export function ChatBot() {
       switch (command.action) {
         // ---- Extension-routed: apply jobs ----
         case 'start': {
-          if (!resume) {
+          const applyMode: ApplyMode = command.applyMode || 'apply';
+
+          if (applyMode === 'apply' && !resume) {
             addMessage({
               role: 'bot',
               content:
@@ -172,6 +194,15 @@ export function ChatBot() {
           const count = command.count || 10;
           await automationApi.start(count);
           setAutomationStatus({ ...automationStatus, isRunning: true, currentAction: 'scrape_jobs' });
+
+          if (applyMode === 'easy') {
+            addMessage({
+              role: 'bot',
+              content: `⚡ **Easy Apply Started!** Running for **${count} jobs**.\n\nThis mode does **not require uploaded resume** in iApply and relies on your LinkedIn Easy Apply setup.\n\n💡 You can say:\n• **"status"** — check progress\n• **"pause"** — pause automation\n• **"stop"** — cancel everything`,
+            });
+            break;
+          }
+
           addMessage({
             role: 'bot',
             content: `🚀 **Started!** I'm applying to **${count} jobs** based on your profile.\n\nThe browser extension will handle the applications on LinkedIn.\n\n💡 You can say:\n• **"status"** — check progress\n• **"pause"** — pause automation\n• **"stop"** — cancel everything`,
@@ -327,7 +358,7 @@ export function ChatBot() {
           addMessage({
             role: 'bot',
             content:
-              '🤖 **Here\'s what I can do:**\n\n**Job Automation** _(sent to extension)_\n• **"Apply 5 jobs"** — Start applying to N jobs\n• **"Apply 10 jobs based on my profile"** — Same, explicit\n• **"Pause"** — Pause current automation\n• **"Stop"** — Stop and reset\n• **"Resume"** — Resume paused automation\n\n**Info & Status**\n• **"Status"** — Check automation progress\n• **"Show applications"** — See recent applications\n• **"Stats"** — View your numbers\n\n**Profile & Settings**\n• **"Show my profile"** — View profile info\n• **"Show resume"** — View resume details\n• **"Preferences"** — View job preferences',
+              '🤖 **Here\'s what I can do:**\n\n**Job Automation** _(sent to extension)_\n• **"Easy apply 5 jobs"** — Start Easy Apply mode (no iApply resume required)\n• **"Apply 5 jobs"** — Start apply mode (requires uploaded resume)\n• **"Apply 10 jobs based on my profile"** — Same, explicit\n• **"Pause"** — Pause current automation\n• **"Stop"** — Stop and reset\n• **"Resume"** — Resume paused automation\n\n**Info & Status**\n• **"Status"** — Check automation progress\n• **"Show applications"** — See recent applications\n• **"Stats"** — View your numbers\n\n**Profile & Settings**\n• **"Show my profile"** — View profile info\n• **"Show resume"** — View resume details\n• **"Preferences"** — View job preferences',
           });
           break;
         }
@@ -356,7 +387,7 @@ export function ChatBot() {
       addMessage({
         role: 'bot',
         content:
-          "I'm not sure what you mean. Here are some things you can try:\n\n• **\"Apply 5 jobs based on my profile\"**\n• **\"Show status\"**\n• **\"Show my applications\"**\n• **\"Show my profile\"**\n• **\"Preferences\"**\n• **\"Help\"** for full command list",
+          "I'm not sure what you mean. Here are some things you can try:\n\n• **\"Easy apply 5 jobs\"**\n• **\"Apply 5 jobs based on my profile\"**\n• **\"Show status\"**\n• **\"Show my applications\"**\n• **\"Show my profile\"**\n• **\"Preferences\"**\n• **\"Help\"** for full command list",
       });
     }
 
