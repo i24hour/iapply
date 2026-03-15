@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
-import { api } from '@/lib/api';
+import { api, authApi } from '@/lib/api';
 import {
   buildExtensionRedirectUrl,
   clearPendingExtensionReturnTo,
@@ -86,6 +86,9 @@ export default function AuthSuccessPage() {
           return;
         }
         if (fromTelegram) {
+          if (telegramContext?.telegramId) {
+            await authApi.linkTelegram(telegramContext.telegramId);
+          }
           sessionStorage.removeItem('telegram_auth_context');
           setViewState('telegram-success');
           return;

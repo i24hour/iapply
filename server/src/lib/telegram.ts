@@ -75,10 +75,16 @@ export function startTelegramBot(token: string) {
   refreshBotProfile().catch(console.error);
 
   // /start command
-  bot.onText(/\/start(.*)/, (msg, match) => {
+  bot.onText(/\/start(.*)/, async (msg, match) => {
     const param = match![1].trim();
 
     if (param === 'success') {
+      const user = await getLinkedUser(msg.chat.id);
+      if (!user) {
+        sendSignInPrompt(msg.chat.id, '⚠️ Sign-in completed but account linking is still pending.');
+        return;
+      }
+
       bot!.sendMessage(msg.chat.id,
         `🎉 *Authentication Successful!*\n\n` +
         `Welcome to iApply! Your account is now securely linked.\n` +
