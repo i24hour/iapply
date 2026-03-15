@@ -56,6 +56,8 @@ export const authApi = {
   signup: (fullName: string, email: string, password: string) =>
     api.post('/auth/signup', { fullName, email, password }),
   me: () => api.get('/auth/me'),
+  linkTelegram: (telegramId: string | number) =>
+    api.post('/auth/link-telegram', { telegramId }),
 };
 
 export const profileApi = {

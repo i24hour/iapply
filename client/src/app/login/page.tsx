@@ -1,31 +1,43 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
-import { api } from '@/lib/api';
+import { authApi } from '@/lib/api';
 import toast from 'react-hot-toast';
 import { Briefcase, Loader2 } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
   const { setAuth } = useAuthStore();
+  const [telegramId, setTelegramId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
   });
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setTelegramId(new URLSearchParams(window.location.search).get('telegram_id'));
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
-      const response = await api.post('/auth/login', formData);
+      const response = await authApi.login(formData.email, formData.password);
       setAuth(response.data.user, response.data.token);
-      toast.success('Welcome back!');
-      router.replace('/dashboard');
+      if (telegramId) {
+        const linkRes = await authApi.linkTelegram(telegramId);
+        toast.success('Telegram verified successfully!');
+        router.replace(`/auth/success?from=telegram&bot=${encodeURIComponent(linkRes.data.botUsername)}`);
+      } else {
+        toast.success('Welcome back!');
+        router.replace('/dashboard');
+      }
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Invalid credentials');
     } finally {
@@ -44,7 +56,10 @@ export default function LoginPage() {
           <h2 className="text-3xl font-bold text-gray-900">Sign in to your account</h2>
           <p className="mt-2 text-gray-600">
             Or{' '}
-            <Link href="/signup" className="text-primary-600 hover:text-primary-500">
+            <Link
+              href={telegramId ? `/signup?telegram_id=${encodeURIComponent(telegramId)}` : '/signup'}
+              className="text-primary-600 hover:text-primary-500"
+            >
               create a new account
             </Link>
           </p>
@@ -56,7 +71,6 @@ export default function LoginPage() {
             type="button"
             onClick={() => {
               const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'https://iapply-telegram-bot.onrender.com';
-              const telegramId = new URLSearchParams(window.location.search).get('telegram_id');
               const telegramParam = telegramId ? `?telegram_id=${encodeURIComponent(telegramId)}` : '';
               window.location.href = `${baseUrl}/auth/google${telegramParam}`;
             }}

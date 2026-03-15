@@ -1,16 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
-import { api } from '@/lib/api';
+import { authApi } from '@/lib/api';
 import toast from 'react-hot-toast';
 import { Briefcase, Loader2 } from 'lucide-react';
 
 export default function SignupPage() {
   const router = useRouter();
   const { setAuth } = useAuthStore();
+  const [telegramId, setTelegramId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     fullName: '',
@@ -18,6 +19,11 @@ export default function SignupPage() {
     password: '',
     confirmPassword: '',
   });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setTelegramId(new URLSearchParams(window.location.search).get('telegram_id'));
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,14 +41,16 @@ export default function SignupPage() {
     setIsLoading(true);
 
     try {
-      const response = await api.post('/auth/signup', {
-        fullName: formData.fullName,
-        email: formData.email,
-        password: formData.password,
-      });
+      const response = await authApi.signup(formData.fullName, formData.email, formData.password);
       setAuth(response.data.user, response.data.token);
-      toast.success('Account created successfully!');
-      router.replace('/dashboard');
+      if (telegramId) {
+        const linkRes = await authApi.linkTelegram(telegramId);
+        toast.success('Telegram verified successfully!');
+        router.replace(`/auth/success?from=telegram&bot=${encodeURIComponent(linkRes.data.botUsername)}`);
+      } else {
+        toast.success('Account created successfully!');
+        router.replace('/dashboard');
+      }
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to create account');
     } finally {
@@ -61,7 +69,10 @@ export default function SignupPage() {
           <h2 className="text-3xl font-bold text-gray-900">Create your account</h2>
           <p className="mt-2 text-gray-600">
             Already have an account?{' '}
-            <Link href="/login" className="text-primary-600 hover:text-primary-500">
+            <Link
+              href={telegramId ? `/login?telegram_id=${encodeURIComponent(telegramId)}` : '/login'}
+              className="text-primary-600 hover:text-primary-500"
+            >
               Sign in
             </Link>
           </p>

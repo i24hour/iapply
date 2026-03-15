@@ -1,37 +1,54 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
-import { Briefcase, Loader2 } from 'lucide-react';
+import Link from 'next/link';
+import { ArrowRight, Briefcase, CheckCircle2, Loader2 } from 'lucide-react';
+
+type ViewState = 'loading' | 'telegram-success' | 'error';
 
 export default function AuthSuccessPage() {
   const router = useRouter();
   const { setAuth } = useAuthStore();
+  const [viewState, setViewState] = useState<ViewState>('loading');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [botUsername, setBotUsername] = useState('infiniteapplybot');
+  const safeBot = botUsername.replace('@', '');
+  const botLinks = {
+    tgDeepLink: `tg://resolve?domain=${safeBot}&start=success`,
+    webBotLink: `https://t.me/${safeBot}?start=success`,
+  };
 
   useEffect(() => {
     const handleAuthSuccess = async () => {
-      // Supabase token can come in hash/query as access_token (standard) or token (legacy)
       const searchParams = new URLSearchParams(window.location.search);
       const hash = window.location.hash;
       const hashParams = new URLSearchParams(hash.replace('#', ''));
+      const fromTelegram = searchParams.get('from') === 'telegram';
+      const bot = searchParams.get('bot');
+      const resolvedBotUsername = (bot || 'infiniteapplybot').replace('@', '');
+      if (bot) {
+        setBotUsername(resolvedBotUsername);
+      }
+
       const token =
         hashParams.get('access_token') ||
         searchParams.get('access_token') ||
         hashParams.get('token') ||
-        searchParams.get('token');
+        searchParams.get('token') ||
+        localStorage.getItem('auth_token');
 
       if (!token) {
-        router.replace('/login');
+        setErrorMessage('Missing authentication token. Please try signing in again.');
+        setViewState('error');
         return;
       }
 
-      // Store token in localStorage so api interceptor picks it up
       localStorage.setItem('auth_token', token);
 
       try {
-        // Fetch user info
         const res = await api.get('/auth/me', {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -45,15 +62,91 @@ export default function AuthSuccessPage() {
           },
           token
         );
-      router.replace('/dashboard');
-      } catch {
+        if (fromTelegram) {
+          setViewState('telegram-success');
+          const openBot = () => {
+            window.location.href = `tg://resolve?domain=${resolvedBotUsername}&start=success`;
+            window.setTimeout(() => {
+              window.location.href = `https://t.me/${resolvedBotUsername}?start=success`;
+            }, 900);
+          };
+
+          window.setTimeout(openBot, 300);
+          return;
+        }
+
+        router.replace('/dashboard');
+      } catch (error) {
+        console.error('Failed to complete auth success flow:', error);
         localStorage.removeItem('auth_token');
-        router.replace('/login');
+        setErrorMessage('We could not complete verification. Please try again.');
+        setViewState('error');
       }
     };
 
     handleAuthSuccess();
-  }, []);
+  }, [router, setAuth]);
+
+  if (viewState === 'telegram-success') {
+    return (
+      <div className="min-h-screen bg-gray-50 px-4 py-10 sm:px-6">
+        <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-lg items-center justify-center">
+          <div className="w-full rounded-2xl border bg-white p-6 text-center shadow-sm sm:p-8">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-green-100">
+              <CheckCircle2 className="h-7 w-7 text-green-600" />
+            </div>
+            <div className="mb-3 flex items-center justify-center gap-2">
+              <Briefcase className="h-7 w-7 text-primary-600" />
+              <span className="text-xl font-bold text-gray-900">JobAuto</span>
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900">Verification complete</h1>
+            <p className="mt-3 text-sm leading-6 text-gray-600 sm:text-base">
+              Your account is now linked with Telegram. We&apos;re sending you back to the bot now.
+            </p>
+
+            <div className="mt-6 space-y-3">
+              <a
+                href={botLinks.webBotLink}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary-600 px-5 py-3 font-semibold text-white transition hover:bg-primary-700"
+              >
+                Go back to Bot
+                <ArrowRight className="h-4 w-4" />
+              </a>
+              <Link
+                href="/dashboard"
+                className="inline-flex w-full items-center justify-center rounded-xl border border-gray-200 px-5 py-3 font-medium text-gray-700 transition hover:bg-gray-50"
+              >
+                Open Dashboard
+              </Link>
+            </div>
+
+            <p className="mt-4 text-xs text-gray-500">
+              If Telegram does not open automatically, tap &quot;Go back to Bot&quot;.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (viewState === 'error') {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-4 text-center">
+        <div className="mb-6 flex items-center gap-3">
+          <Briefcase className="h-10 w-10 text-primary-600" />
+          <span className="text-2xl font-bold">JobAuto</span>
+        </div>
+        <p className="max-w-md text-gray-600">{errorMessage}</p>
+        <Link
+          href="/login"
+          className="mt-6 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-5 py-3 font-semibold text-white hover:bg-primary-700"
+        >
+          Back to login
+          <ArrowRight className="h-4 w-4" />
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
