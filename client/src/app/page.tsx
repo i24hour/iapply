@@ -4,6 +4,11 @@ import { useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
+import {
+  buildExtensionRedirectUrl,
+  clearPendingExtensionReturnTo,
+  getPendingExtensionReturnTo,
+} from '@/lib/extension-auth';
 import { ArrowRight, Briefcase, Zap, Shield, BarChart3 } from 'lucide-react';
 
 export default function HomePage() {
@@ -15,6 +20,14 @@ export default function HomePage() {
 
     const hash = window.location.hash;
     const hasAuthToken = hash.includes('access_token=') || hash.includes('token=');
+    const pendingExtensionReturnTo = getPendingExtensionReturnTo();
+    const storedToken = localStorage.getItem('auth_token');
+
+    if (pendingExtensionReturnTo && storedToken && !hasAuthToken) {
+      clearPendingExtensionReturnTo();
+      window.location.replace(buildExtensionRedirectUrl(pendingExtensionReturnTo, storedToken));
+      return;
+    }
 
     if (!hasAuthToken) return;
 

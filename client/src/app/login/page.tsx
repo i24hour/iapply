@@ -5,6 +5,11 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import { authApi } from '@/lib/api';
+import {
+  buildExtensionRedirectUrl,
+  isExtensionReturnTo,
+  rememberExtensionReturnTo,
+} from '@/lib/extension-auth';
 import toast from 'react-hot-toast';
 import { Briefcase, Loader2 } from 'lucide-react';
 
@@ -31,7 +36,14 @@ export default function LoginPage() {
     const params = new URLSearchParams(window.location.search);
     setTelegramId(params.get('telegram_id'));
     const nextReturnTo = params.get('return_to');
-    setReturnTo(nextReturnTo?.startsWith('chrome-extension://') ? nextReturnTo : null);
+    const safeReturnTo = isExtensionReturnTo(nextReturnTo) ? nextReturnTo : null;
+    setReturnTo(safeReturnTo);
+    rememberExtensionReturnTo(safeReturnTo);
+
+    const token = localStorage.getItem('auth_token');
+    if (safeReturnTo && token) {
+      window.location.replace(buildExtensionRedirectUrl(safeReturnTo, token));
+    }
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -46,11 +58,7 @@ export default function LoginPage() {
         toast.success('Telegram verified successfully!');
         router.replace(`/auth/success?from=telegram&bot=${encodeURIComponent(linkRes.data.botUsername)}`);
       } else if (returnTo) {
-        const hash = new URLSearchParams({
-          access_token: response.data.token,
-          token: response.data.token,
-        });
-        window.location.replace(`${returnTo}#${hash.toString()}`);
+        window.location.replace(buildExtensionRedirectUrl(returnTo, response.data.token));
       } else {
         toast.success('Welcome back!');
         router.replace('/dashboard');

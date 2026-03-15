@@ -4,6 +4,12 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
+import {
+  buildExtensionRedirectUrl,
+  clearPendingExtensionReturnTo,
+  getPendingExtensionReturnTo,
+  isExtensionReturnTo,
+} from '@/lib/extension-auth';
 import Link from 'next/link';
 import { ArrowRight, Briefcase, CheckCircle2, Loader2 } from 'lucide-react';
 
@@ -37,7 +43,7 @@ export default function AuthSuccessPage() {
       const telegramContext = telegramContextRaw ? JSON.parse(telegramContextRaw) as { telegramId?: string } : null;
       const fromTelegram = searchParams.get('from') === 'telegram' || !!telegramContext?.telegramId;
       const rawReturnTo = searchParams.get('return_to');
-      const returnTo = rawReturnTo?.startsWith('chrome-extension://') ? rawReturnTo : null;
+      const returnTo = isExtensionReturnTo(rawReturnTo) ? rawReturnTo : getPendingExtensionReturnTo();
       const bot = searchParams.get('bot');
       const resolvedBotUsername = (bot || 'infiniteapplybot').replace('@', '');
       if (bot) {
@@ -74,15 +80,9 @@ export default function AuthSuccessPage() {
           token
         );
         if (returnTo) {
-          const hash = new URLSearchParams({
-            access_token: token,
-            token,
-          });
           const refreshToken = hashParams.get('refresh_token') || searchParams.get('refresh_token');
-          if (refreshToken) {
-            hash.set('refresh_token', refreshToken);
-          }
-          window.location.replace(`${returnTo}#${hash.toString()}`);
+          clearPendingExtensionReturnTo();
+          window.location.replace(buildExtensionRedirectUrl(returnTo, token, refreshToken));
           return;
         }
         if (fromTelegram) {

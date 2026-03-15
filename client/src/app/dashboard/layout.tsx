@@ -7,6 +7,11 @@ import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import { cn } from '@/lib/utils';
 import {
+  buildExtensionRedirectUrl,
+  clearPendingExtensionReturnTo,
+  getPendingExtensionReturnTo,
+} from '@/lib/extension-auth';
+import {
   Briefcase,
   LayoutDashboard,
   User,
@@ -46,6 +51,18 @@ export default function DashboardLayout({
       router.push('/login');
     }
   }, [hydrated, isAuthenticated, router]);
+
+  useEffect(() => {
+    if (!hydrated || !isAuthenticated || typeof window === 'undefined') return;
+
+    const pendingExtensionReturnTo = getPendingExtensionReturnTo();
+    const token = localStorage.getItem('auth_token');
+
+    if (!pendingExtensionReturnTo || !token) return;
+
+    clearPendingExtensionReturnTo();
+    window.location.replace(buildExtensionRedirectUrl(pendingExtensionReturnTo, token));
+  }, [hydrated, isAuthenticated]);
 
   useEffect(() => {
     setMobileNavOpen(false);

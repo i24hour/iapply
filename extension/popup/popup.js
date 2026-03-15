@@ -86,6 +86,13 @@ async function loadAuthState() {
   }
 }
 
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local') return;
+  if (changes.supabase_token || changes.auth_user_email || changes.auth_user_id) {
+    loadAuthState();
+  }
+});
+
 // Load saved settings
 chrome.storage.local.get(['llm_provider', 'llm_api_key', 'llm_model', 'llm_base_url', 'search_query', 'post_title_query', 'post_keywords_query'], (res) => {
   if (res.llm_provider) elProvider.value = res.llm_provider;
