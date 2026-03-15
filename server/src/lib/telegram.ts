@@ -135,6 +135,32 @@ export function startTelegramBot(token: string) {
     bot!.sendMessage(msg.chat.id, `${emoji} Agent Status: *${status.toUpperCase()}*`, { parse_mode: 'Markdown' }).catch(console.error);
   });
 
+  // /whoami command
+  bot.onText(/\/whoami/, async (msg) => {
+    const user = await getUserByTelegramId(msg.chat.id);
+
+    if (user) {
+      bot!.sendMessage(
+        msg.chat.id,
+        `✅ *Linked Successfully*\n\n` +
+        `• Chat ID: \`${msg.chat.id}\`\n` +
+        `• Account: \`${user.email || 'unknown'}\``,
+        { parse_mode: 'Markdown' }
+      ).catch(console.error);
+      return;
+    }
+
+    const authUrl = getTelegramLoginUrl(msg.chat.id);
+    bot!.sendMessage(
+      msg.chat.id,
+      `❌ *Not Linked Yet*\n\n` +
+      `• Chat ID: \`${msg.chat.id}\`\n\n` +
+      `Please complete sign-in from this link:\n` +
+      `[👉 Click Here to Sign In](${authUrl})`,
+      { parse_mode: 'Markdown', disable_web_page_preview: true }
+    ).catch(console.error);
+  });
+
   bot.onText(/\/stats/, async (msg) => {
     if (!await isAuthorized(msg.chat.id)) {
       const authUrl = getTelegramLoginUrl(msg.chat.id);
@@ -196,6 +222,7 @@ export function startTelegramBot(token: string) {
       `▸ /stop — Stop the running agent\n` +
       `▸ /screenshot — Capture Chrome browser window\n` +
       `▸ /status — Check if agent is running\n` +
+      `▸ /whoami — Check account linking status\n` +
       `▸ /stats — Show linked user count\n` +
       `▸ /logs — View last 10 log entries\n` +
       `▸ /help — Show this help message`,
