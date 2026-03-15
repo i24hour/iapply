@@ -1,11 +1,29 @@
 'use client';
 
+import { useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import { ArrowRight, Briefcase, Zap, Shield, BarChart3 } from 'lucide-react';
 
 export default function HomePage() {
+  const router = useRouter();
   const { user } = useAuthStore();
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const hash = window.location.hash;
+    const hasAuthToken = hash.includes('access_token=') || hash.includes('token=');
+
+    if (!hasAuthToken) return;
+
+    const telegramContextRaw = sessionStorage.getItem('telegram_auth_context');
+    const isTelegramFlow = !!telegramContextRaw;
+    const search = isTelegramFlow ? '?from=telegram' : '';
+
+    router.replace(`/auth/success${search}${hash}`);
+  }, [router]);
 
   return (
     <div className="min-h-screen">

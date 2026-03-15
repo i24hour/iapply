@@ -33,7 +33,9 @@ export default function AuthSuccessPage() {
       const searchParams = new URLSearchParams(window.location.search);
       const hash = window.location.hash;
       const hashParams = new URLSearchParams(hash.replace('#', ''));
-      const fromTelegram = searchParams.get('from') === 'telegram';
+      const telegramContextRaw = sessionStorage.getItem('telegram_auth_context');
+      const telegramContext = telegramContextRaw ? JSON.parse(telegramContextRaw) as { telegramId?: string } : null;
+      const fromTelegram = searchParams.get('from') === 'telegram' || !!telegramContext?.telegramId;
       const bot = searchParams.get('bot');
       const resolvedBotUsername = (bot || 'infiniteapplybot').replace('@', '');
       if (bot) {
@@ -70,6 +72,7 @@ export default function AuthSuccessPage() {
           token
         );
         if (fromTelegram) {
+          sessionStorage.removeItem('telegram_auth_context');
           setViewState('telegram-success');
           return;
         }

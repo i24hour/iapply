@@ -72,6 +72,9 @@ export default function LoginPage() {
             onClick={() => {
               const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'https://iapply-telegram-bot.onrender.com';
               const telegramParam = telegramId ? `?telegram_id=${encodeURIComponent(telegramId)}` : '';
+              if (telegramId && typeof window !== 'undefined') {
+                sessionStorage.setItem('telegram_auth_context', JSON.stringify({ telegramId }));
+              }
               window.location.href = `${baseUrl}/auth/google${telegramParam}`;
             }}
             className="w-full flex items-center justify-center gap-3 bg-white border border-gray-300 text-gray-700 px-4 py-3 rounded-lg font-semibold hover:bg-gray-50 transition"
