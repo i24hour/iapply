@@ -2,6 +2,11 @@
 
 Automated job application platform with AI-powered resume parsing and form filling.
 
+## Live Links
+
+- **Frontend:** https://iapply.onrender.com
+- **Backend:** https://iapply-telegram-bot.onrender.com
+
 ## Quick Start
 
 > **All commands should be run from the `jobs/` directory (root folder)**
