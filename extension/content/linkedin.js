@@ -280,6 +280,182 @@ function getElementText(el) {
   return el.getAttribute('aria-label') || el.innerText || el.textContent || '';
 }
 
+function getFieldLabel(el) {
+  if (!el) return '';
+
+  const ariaLabel = el.getAttribute('aria-label');
+  if (ariaLabel) return ariaLabel.trim();
+
+  const fieldContainer = el.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping, .artdeco-text-input--container');
+  if (fieldContainer) {
+    const label = fieldContainer.querySelector('label, legend, .fb-dash-form-element__label, .t-14');
+    if (label && label.textContent) return label.textContent.trim();
+  }
+
+  const forLabel = document.querySelector(`label[for="${el.id}"]`);
+  if (forLabel && forLabel.textContent) return forLabel.textContent.trim();
+
+  return el.placeholder || el.name || '';
+}
+
+function getInlineErrorText(el) {
+  const fieldContainer = el.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping, .artdeco-text-input--container');
+  if (!fieldContainer) return '';
+
+  const errorEl = fieldContainer.querySelector('.artdeco-inline-feedback__message, .artdeco-inline-feedback--error, .fb-dash-form-element__error-message, [role="alert"]');
+  return errorEl?.textContent?.trim() || '';
+}
+
+function isNumericInput(el) {
+  if (!el) return false;
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  const inputMode = (el.getAttribute('inputmode') || '').toLowerCase();
+  const pattern = (el.getAttribute('pattern') || '').toLowerCase();
+  return type === 'number' || inputMode === 'numeric' || /\\d|[0-9]/.test(pattern);
+}
+
+function pickFallbackValue(labelText, el) {
+  const label = (labelText || '').toLowerCase();
+
+  if (label.includes('expected ctc') || label.includes('expected salary')) {
+    return isNumericInput(el) ? '300000' : '300000';
+  }
+  if (label.includes('current ctc') || label.includes('current salary')) {
+    return isNumericInput(el) ? '200000' : '200000';
+  }
+  if (label.includes('notice period')) {
+    return isNumericInput(el) ? '1' : '1 month';
+  }
+  if (label.includes('year') || label.includes('experience')) {
+    return isNumericInput(el) ? '3' : '3 years';
+  }
+  if (label.includes('phone') || label.includes('mobile')) {
+    return '9876543210';
+  }
+
+  return isNumericInput(el) ? '1' : 'Yes';
+}
+
+async function setInputValue(element, value) {
+  element.focus();
+  element.value = '';
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+  await sleep(120);
+  await typeText(element, value);
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  element.dispatchEvent(new Event('blur', { bubbles: true }));
+}
+
+function getEasyApplyModal() {
+  return document.querySelector('.jobs-easy-apply-modal, [role="dialog"].jobs-easy-apply-modal, .artdeco-modal');
+}
+
+function listModalValidationIssues() {
+  const modal = getEasyApplyModal();
+  if (!modal) return [];
+
+  const issues = [];
+  const fields = modal.querySelectorAll('input, textarea, select');
+
+  for (const field of fields) {
+    if (!isElementVisible(field) || field.disabled || field.readOnly) continue;
+
+    const label = getFieldLabel(field);
+    const errorText = getInlineErrorText(field);
+    const value = (field.value || '').trim();
+    const required = field.required || field.getAttribute('aria-required') === 'true';
+    const invalid = field.getAttribute('aria-invalid') === 'true' || Boolean(errorText);
+    const type = (field.getAttribute('type') || '').toLowerCase();
+
+    // Ignore hidden helper fields and search fields in dropdown widgets.
+    if (type === 'hidden' || field.getAttribute('aria-hidden') === 'true') continue;
+
+    if ((required && !value) || invalid) {
+      issues.push({
+        field,
+        label,
+        errorText,
+        required,
+        invalid,
+        value,
+        tag: field.tagName.toLowerCase(),
+        type
+      });
+    }
+  }
+
+  return issues;
+}
+
+async function autoFixModalValidationIssues() {
+  const issues = listModalValidationIssues();
+  if (!issues.length) return { fixed: 0, remaining: 0, details: [] };
+
+  let fixed = 0;
+  const details = [];
+
+  for (const issue of issues) {
+    const { field, tag, type, label } = issue;
+
+    try {
+      if (tag === 'select') {
+        const options = Array.from(field.querySelectorAll('option'));
+        const firstReal = options.find(opt => (opt.value || '').trim() !== '');
+        if (firstReal) {
+          field.value = firstReal.value;
+          field.dispatchEvent(new Event('change', { bubbles: true }));
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          fixed++;
+          details.push(`Selected "${firstReal.textContent.trim()}" for ${label || 'dropdown'}`);
+          await sleep(120);
+          continue;
+        }
+      }
+
+      if (type === 'checkbox') {
+        if (!field.checked) {
+          await humanClick(field);
+          fixed++;
+          details.push(`Checked ${label || 'required checkbox'}`);
+          await sleep(120);
+        }
+        continue;
+      }
+
+      if (type === 'radio') {
+        const name = field.name;
+        const group = name ? Array.from(document.querySelectorAll(`input[type="radio"][name="${name}"]`)) : [field];
+        const selected = group.some(r => r.checked);
+        if (!selected && group.length) {
+          await humanClick(group[0]);
+          fixed++;
+          details.push(`Selected radio option for ${label || name || 'required question'}`);
+          await sleep(120);
+        }
+        continue;
+      }
+
+      const fallback = pickFallbackValue(label, field);
+      if (fallback) {
+        await setInputValue(field, fallback);
+        fixed++;
+        details.push(`Filled ${label || 'required field'} with "${fallback}"`);
+      }
+    } catch (error) {
+      console.warn('Failed to auto-fix field:', label, error);
+    }
+  }
+
+  const remaining = listModalValidationIssues().length;
+  return { fixed, remaining, details };
+}
+
+function isPrimaryApplyActionButton(el) {
+  if (!el || el.tagName !== 'BUTTON') return false;
+  const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').toLowerCase();
+  return text.includes('review') || text.includes('next') || text.includes('continue') || text.includes('submit application') || text.includes('submit');
+}
+
 function buildDOMSnapshot() {
   const interactiveSelectors = [
     'button', 'a[href]', 'input', 'select', 'textarea',
@@ -310,6 +486,10 @@ function buildDOMSnapshot() {
       role: el.getAttribute('role') || null,
       text: text.substring(0, 100), // truncate very long text
       value: el.value || undefined,
+      label: getFieldLabel(el) || undefined,
+      required: el.required || el.getAttribute('aria-required') === 'true' || undefined,
+      invalid: el.getAttribute('aria-invalid') === 'true' || undefined,
+      errorText: getInlineErrorText(el) || undefined,
       checked: el.checked !== undefined ? el.checked : undefined,
       center: {
         x: Math.round(rect.left + rect.width / 2),
@@ -321,7 +501,18 @@ function buildDOMSnapshot() {
   }
 
   // Also grab raw text of the body to detect CAPTCHAs or page context broadly
-  const rawText = document.body.innerText.substring(0, 2000);
+  const validationIssues = listModalValidationIssues();
+  const validationSummary = validationIssues
+    .slice(0, 10)
+    .map(issue => {
+      const label = issue.label || issue.field?.name || 'Unknown field';
+      const reason = issue.errorText || (issue.required && !issue.value ? 'Required field is empty' : 'Invalid value');
+      return `- ${label}: ${reason}`;
+    })
+    .join('\n');
+
+  const modalText = getEasyApplyModal()?.innerText || '';
+  const rawText = `${validationSummary ? `FORM_VALIDATION_ERRORS:\n${validationSummary}\n\n` : ''}${modalText}\n\n${document.body.innerText}`.substring(0, 3500);
 
   return { 
     elements: snapshot, 
@@ -354,6 +545,12 @@ async function executeAgentAction(decision) {
 
   try {
     if (action === 'click') {
+      if (isPrimaryApplyActionButton(el)) {
+        const fixResult = await autoFixModalValidationIssues();
+        if (fixResult.fixed > 0) {
+          console.log(`Auto-fixed ${fixResult.fixed} field(s) before proceeding.`);
+        }
+      }
       await humanClick(el);
     } else if (action === 'type') {
       await typeText(el, value || '');

@@ -164,7 +164,7 @@ CURRENT PAGE:
 - Page text (first 1500 chars): ${snapshot.rawText.substring(0, 1500)}
 
 INTERACTIVE ELEMENTS ON PAGE (id, tag, text):
-${snapshot.elements.map(e => `[${e.id}] <${e.tag}${e.type ? ' type=' + e.type : ''}${e.role ? ' role=' + e.role : ''}> "${e.text}"${e.value ? ' value="' + e.value + '"' : ''}`).join('\n')}
+${snapshot.elements.map(e => `[${e.id}] <${e.tag}${e.type ? ' type=' + e.type : ''}${e.role ? ' role=' + e.role : ''}> "${e.text}"${e.label ? ' label="' + e.label + '"' : ''}${e.value ? ' value="' + e.value + '"' : ''}${e.required ? ' required=true' : ''}${e.invalid ? ' invalid=true' : ''}${e.errorText ? ' error="' + e.errorText + '"' : ''}`).join('\n')}
 
 RULES:
 1. If the page shows "No results found", click "Clear all filters" or change the search query.
@@ -183,6 +183,7 @@ RULES:
 13. For <select> dropdown elements (showing "Select an option" or similar), use "select_option" with the value to select.
 14. For radio buttons, click the specific radio option (e.g., click the element with text "Yes").
 15. After filling ALL new fields in a modal step, always click the primary action button ("Next", "Continue", "Review", or "Submit").
+16. If CURRENT PAGE text contains "FORM_VALIDATION_ERRORS", do NOT click Review/Next/Submit until those specific fields are fixed.
 ${stuckHint}
 
 AVAILABLE ACTIONS:
