@@ -7,8 +7,10 @@ let currentGoal = '';
 let settings = {};
 let stepCount = 0;
 let lastActions = []; // Track last N actions for stuck detection
+let recentPageSignatures = [];
 const MAX_STEPS = 50;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
+const STAGNATION_WINDOW = 4;
 
 // Constants
 const ANTHROPIC_DEFAULT_URL = 'https://api.anthropic.com';
@@ -23,6 +25,7 @@ export async function startAgent(config) {
   settings = config;
   agentState = 'NAVIGATING';
   stepCount = 0;
+  recentPageSignatures = [];
   currentGoal = `Find and apply to "${settings.searchQuery}" jobs on LinkedIn using Easy Apply.`;
   
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
@@ -45,6 +48,7 @@ export async function startAgent(config) {
 export function stopAgent() {
   agentState = 'IDLE';
   lastActions = [];
+  recentPageSignatures = [];
   broadcastLog('Stopped by user.');
   chrome.runtime.sendMessage({ action: 'agent_stopped' }).catch(() => {});
 }
@@ -90,19 +94,42 @@ async function runAgentLoop() {
 
     broadcastLog(`Page: ${snapshot.url} | ${snapshot.elements.length} elements`);
 
+    updatePageSignature(snapshot);
+    const pageIsStagnant = isPageStagnant();
+
     // 2. Stuck detection — check if LLM is repeating itself
     let stuckHint = '';
+    let repeatedActionKey = '';
+    let repeatedActionDetected = false;
     if (lastActions.length >= MAX_REPEATS) {
       const recent = lastActions.slice(-MAX_REPEATS);
       const allSame = recent.every(a => a === recent[0]);
       if (allSame) {
+        repeatedActionDetected = true;
+        repeatedActionKey = recent[0];
         stuckHint = `\n\nWARNING: You have repeated the EXACT SAME action "${recent[0]}" ${MAX_REPEATS} times in a row. The element is NOT responding to clicks. Try a DIFFERENT approach: use a different action type, interact with a different element, or scroll to find other elements. For <select> dropdowns, use "select_option" instead of "click".`;
         broadcastLog(`Stuck detected! Same action repeated ${MAX_REPEATS}x. Sending hint to LLM.`, true);
       }
     }
 
-    // 3. Ask LLM
-    const decision = await callLLM(snapshot, stuckHint);
+    if (pageIsStagnant) {
+      stuckHint += '\n\nWARNING: The page appears unchanged for multiple steps. You MUST choose a different strategy now.';
+      broadcastLog(`Stuck detected! Page unchanged for ${STAGNATION_WINDOW} steps. Triggering recovery strategy.`, true);
+    }
+
+    // 3. Ask LLM or auto-recover when stuck
+    let decision = null;
+    if (repeatedActionDetected || pageIsStagnant) {
+      decision = chooseRecoveryDecision(snapshot, repeatedActionKey);
+      if (decision) {
+        broadcastLog(`Recovery Action: ${decision.action} → ${decision.elementId || 'N/A'} ${decision.value ? '(val: ' + decision.value + ')' : ''}`, true);
+      }
+    }
+
+    if (!decision) {
+      decision = await callLLM(snapshot, stuckHint);
+    }
+
     broadcastLog(`LLM: ${decision.reasoning}`);
     broadcastLog(`Action: ${decision.action} → ${decision.elementId || 'N/A'} ${decision.value ? '(val: ' + decision.value + ')' : ''}`);
     
@@ -151,6 +178,110 @@ async function runAgentLoop() {
   }
 }
 
+function updatePageSignature(snapshot) {
+  const signature = JSON.stringify({
+    url: snapshot.url,
+    modalHint: (snapshot.rawText || '').substring(0, 280),
+    elements: (snapshot.elements || []).slice(0, 25).map((e) => ({
+      tag: e.tag,
+      text: e.text,
+      label: e.label,
+      value: e.value,
+      required: !!e.required,
+      invalid: !!e.invalid
+    }))
+  });
+
+  recentPageSignatures.push(signature);
+  if (recentPageSignatures.length > 8) recentPageSignatures.shift();
+}
+
+function isPageStagnant() {
+  if (recentPageSignatures.length < STAGNATION_WINDOW) return false;
+  const recent = recentPageSignatures.slice(-STAGNATION_WINDOW);
+  return recent.every((sig) => sig === recent[0]);
+}
+
+function isPrimaryProgressButton(el) {
+  const text = (el?.text || '').toLowerCase();
+  if (!text) return false;
+  if (text.includes('back') || text.includes('dismiss') || text.includes('save draft')) return false;
+  return text.includes('next') || text.includes('review') || text.includes('continue') || text.includes('submit');
+}
+
+function parseActionKey(actionKey) {
+  if (!actionKey) return null;
+  const firstColon = actionKey.indexOf(':');
+  const lastColon = actionKey.lastIndexOf(':');
+  if (firstColon === -1 || lastColon === -1 || firstColon === lastColon) return null;
+  const action = actionKey.slice(0, firstColon);
+  const elementId = actionKey.slice(firstColon + 1, lastColon);
+  const value = actionKey.slice(lastColon + 1);
+  return { action, elementId, value };
+}
+
+function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
+  const repeated = parseActionKey(repeatedActionKey);
+  const elements = snapshot.elements || [];
+  const progressButton = elements.find(isPrimaryProgressButton);
+
+  if (repeated?.action === 'select_option') {
+    const target = elements.find((e) => e.id === repeated.elementId);
+
+    if (target && target.value && !target.invalid && progressButton) {
+      return {
+        action: 'click',
+        elementId: progressButton.id,
+        reasoning: 'Recovery mode: dropdown already has a value, moving forward by clicking the primary progress button.'
+      };
+    }
+
+    const anotherRequiredSelect = elements.find((e) =>
+      e.id !== repeated.elementId &&
+      (e.tag === 'select' || e.role === 'combobox') &&
+      (e.invalid || (e.required && (!e.value || String(e.value).trim() === '')))
+    );
+
+    if (anotherRequiredSelect) {
+      return {
+        action: 'select_option',
+        elementId: anotherRequiredSelect.id,
+        value: 'Yes',
+        reasoning: 'Recovery mode: switching to another required/invalid dropdown instead of repeating the same select action.'
+      };
+    }
+
+    if (progressButton) {
+      return {
+        action: 'click',
+        elementId: progressButton.id,
+        reasoning: 'Recovery mode: forcing progress because repeated dropdown selection did not change the page.'
+      };
+    }
+  }
+
+  if ((repeated?.action === 'type' || repeated?.action === 'clear_and_type') && progressButton) {
+    return {
+      action: 'click',
+      elementId: progressButton.id,
+      reasoning: 'Recovery mode: stopping repeated typing and attempting to continue to the next step.'
+    };
+  }
+
+  if (progressButton) {
+    return {
+      action: 'click',
+      elementId: progressButton.id,
+      reasoning: 'Recovery mode: selecting the primary progress button to break the loop.'
+    };
+  }
+
+  return {
+    action: 'scroll',
+    reasoning: 'Recovery mode: scrolling to reveal new elements and break repetitive behavior.'
+  };
+}
+
 // ---- LLM Provider Abstraction ----
 
 async function callLLM(snapshot, stuckHint = '') {
@@ -185,6 +316,8 @@ RULES:
 15. After filling ALL new fields in a modal step, always click the primary action button ("Next", "Continue", "Review", or "Submit").
 16. If CURRENT PAGE text contains "FORM_VALIDATION_ERRORS", do NOT click Review/Next/Submit until those specific fields are fixed.
 17. If a field label or error mentions decimal, numeric, number, salary, CTC, notice period, or experience, enter digits only. Example: use "1" instead of "1 month".
+18. HARD RULE: If you selected the same dropdown value 2+ times and the field now has a non-empty value without invalid=true, STOP selecting it again and click the step button (Next/Review/Continue/Submit).
+19. HARD RULE: If the page appears unchanged after your previous action, you MUST switch strategy (different element, click progress button, or scroll). Never repeat the same action 3 times.
 ${stuckHint}
 
 AVAILABLE ACTIONS:
