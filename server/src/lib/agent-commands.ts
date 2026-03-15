@@ -3,6 +3,7 @@
 
 export interface AgentCommand {
   id: string;
+  userId: string;
   type: 'start_agent' | 'stop_agent' | 'request_screenshot';
   payload: {
     searchQuery?: string;
@@ -15,14 +16,28 @@ export interface AgentCommand {
 }
 
 export interface AgentLog {
+  userId: string;
   timestamp: Date;
   message: string;
   isError: boolean;
 }
 
-let commands: AgentCommand[] = [];
-let logs: AgentLog[] = [];
-let agentStatus: 'idle' | 'running' | 'error' = 'idle';
+type AgentState = {
+  commands: AgentCommand[];
+  logs: AgentLog[];
+  status: 'idle' | 'running' | 'error';
+};
+
+const userState = new Map<string, AgentState>();
+
+function getState(userId: string): AgentState {
+  let state = userState.get(userId);
+  if (!state) {
+    state = { commands: [], logs: [], status: 'idle' };
+    userState.set(userId, state);
+  }
+  return state;
+}
 
 // Listeners for real-time log forwarding (Telegram, etc.)
 type LogListener = (log: AgentLog) => void;
@@ -38,25 +53,29 @@ export function removeLogListener(listener: LogListener) {
 }
 
 export function pushCommand(cmd: Omit<AgentCommand, 'id' | 'status' | 'createdAt'>): AgentCommand {
+  const state = getState(cmd.userId);
   const command: AgentCommand = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    userId: cmd.userId,
     type: cmd.type,
     payload: cmd.payload,
     status: 'pending',
     createdAt: new Date(),
   };
-  commands.push(command);
+  state.commands.push(command);
   return command;
 }
 
-export function getPendingCommand(): AgentCommand | null {
-  const cmd = commands.find(c => c.status === 'pending');
+export function getPendingCommand(userId: string): AgentCommand | null {
+  const state = getState(userId);
+  const cmd = state.commands.find((c) => c.status === 'pending');
   if (cmd) cmd.status = 'in_progress';
   return cmd || null;
 }
 
-export function completeCommand(id: string): boolean {
-  const cmd = commands.find(c => c.id === id);
+export function completeCommand(userId: string, id: string): boolean {
+  const state = getState(userId);
+  const cmd = state.commands.find((c) => c.id === id);
   if (cmd) {
     cmd.status = 'completed';
     return true;
@@ -64,25 +83,26 @@ export function completeCommand(id: string): boolean {
   return false;
 }
 
-export function addLog(message: string, isError = false) {
-  const log: AgentLog = { timestamp: new Date(), message, isError };
-  logs.push(log);
-  // Keep only last 200 logs
-  if (logs.length > 200) logs.splice(0, logs.length - 200);
+export function addLog(userId: string, message: string, isError = false) {
+  const state = getState(userId);
+  const log: AgentLog = { userId, timestamp: new Date(), message, isError };
+  state.logs.push(log);
+  // Keep only last 200 logs per user
+  if (state.logs.length > 200) state.logs.splice(0, state.logs.length - 200);
   // Notify all listeners
   for (const listener of logListeners) {
     try { listener(log); } catch {}
   }
 }
 
-export function getRecentLogs(count = 20): AgentLog[] {
-  return logs.slice(-count);
+export function getRecentLogs(userId: string, count = 20): AgentLog[] {
+  return getState(userId).logs.slice(-count);
 }
 
-export function setAgentStatus(status: 'idle' | 'running' | 'error') {
-  agentStatus = status;
+export function setAgentStatus(userId: string, status: 'idle' | 'running' | 'error') {
+  getState(userId).status = status;
 }
 
-export function getAgentStatus() {
-  return agentStatus;
+export function getAgentStatus(userId: string) {
+  return getState(userId).status;
 }

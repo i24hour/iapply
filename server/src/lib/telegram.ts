@@ -1,10 +1,9 @@
 // Telegram Bot - Controls the Chrome Extension Agent remotely
 import TelegramBot from 'node-telegram-bot-api';
 import { pushCommand, onAgentLog, getAgentStatus, getRecentLogs } from './agent-commands.js';
-import { getUserByTelegramId, countLinkedTelegramUsers } from './supabase.js';
+import { getUserById, getUserByTelegramId, countLinkedTelegramUsers } from './supabase.js';
 
 let bot: TelegramBot | null = null;
-let authorizedChatId: number | null = null;
 
 function getTelegramLoginUrl(chatId: number) {
   const clientUrl = process.env.CLIENT_URL || 'https://iapply.onrender.com';
@@ -54,7 +53,6 @@ export function startTelegramBot(token: string) {
         { parse_mode: 'Markdown' }
       ).catch(console.error);
       refreshBotProfile().catch(console.error);
-      authorizedChatId = msg.chat.id;
       return;
     }
 
@@ -69,18 +67,14 @@ export function startTelegramBot(token: string) {
   });
 
   // Helper: check if this chat ID is authorized
-  async function isAuthorized(chatId: number): Promise<boolean> {
-    const user = await getUserByTelegramId(chatId);
-    if (user) {
-      authorizedChatId = chatId; // refresh in-memory cache
-      return true;
-    }
-    return false;
+  async function getLinkedUser(chatId: number) {
+    return getUserByTelegramId(chatId);
   }
 
   // /apply command — starts the agent
   bot.onText(/\/apply (.+)/, async (msg, match) => {
-    if (!await isAuthorized(msg.chat.id)) {
+    const user = await getLinkedUser(msg.chat.id);
+    if (!user) {
       const authUrl = getTelegramLoginUrl(msg.chat.id);
       bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
       return;
@@ -93,6 +87,7 @@ export function startTelegramBot(token: string) {
     }
 
     const cmd = pushCommand({
+      userId: user.id,
       type: 'start_agent',
       payload: {
         searchQuery: query,
@@ -113,24 +108,26 @@ export function startTelegramBot(token: string) {
 
   // /stop command
   bot.onText(/\/stop/, async (msg) => {
-    if (!await isAuthorized(msg.chat.id)) {
+    const user = await getLinkedUser(msg.chat.id);
+    if (!user) {
       const authUrl = getTelegramLoginUrl(msg.chat.id);
       bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
       return;
     }
 
-    pushCommand({ type: 'stop_agent', payload: {} });
+    pushCommand({ userId: user.id, type: 'stop_agent', payload: {} });
     bot!.sendMessage(msg.chat.id, '⏹ *Agent Stop command sent.*\nThe extension will stop after the current step.', { parse_mode: 'Markdown' }).catch(console.error);
   });
 
   // /status command
   bot.onText(/\/status/, async (msg) => {
-    if (!await isAuthorized(msg.chat.id)) {
+    const user = await getLinkedUser(msg.chat.id);
+    if (!user) {
       bot!.sendMessage(msg.chat.id, '🔒 Please link your account first.').catch(console.error);
       return;
     }
 
-    const status = getAgentStatus();
+    const status = getAgentStatus(user.id);
     const emoji = status === 'running' ? '🟢' : status === 'error' ? '🔴' : '⚪';
     bot!.sendMessage(msg.chat.id, `${emoji} Agent Status: *${status.toUpperCase()}*`, { parse_mode: 'Markdown' }).catch(console.error);
   });
@@ -162,7 +159,8 @@ export function startTelegramBot(token: string) {
   });
 
   bot.onText(/\/stats/, async (msg) => {
-    if (!await isAuthorized(msg.chat.id)) {
+    const user = await getLinkedUser(msg.chat.id);
+    if (!user) {
       const authUrl = getTelegramLoginUrl(msg.chat.id);
       bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
       return;
@@ -183,12 +181,13 @@ export function startTelegramBot(token: string) {
 
   // /logs command
   bot.onText(/\/logs/, async (msg) => {
-    if (!await isAuthorized(msg.chat.id)) {
+    const user = await getLinkedUser(msg.chat.id);
+    if (!user) {
       bot!.sendMessage(msg.chat.id, '🔒 Please link your account first.').catch(console.error);
       return;
     }
 
-    const logs = getRecentLogs(10);
+    const logs = getRecentLogs(user.id, 10);
     if (logs.length === 0) {
       bot!.sendMessage(msg.chat.id, '📭 No logs yet.').catch(console.error);
       return;
@@ -204,13 +203,13 @@ export function startTelegramBot(token: string) {
 
   // /screenshot command
   bot.onText(/\/screenshot/, async (msg) => {
-    if (!await isAuthorized(msg.chat.id)) {
+    const user = await getLinkedUser(msg.chat.id);
+    if (!user) {
       bot!.sendMessage(msg.chat.id, '🔒 Please link your account first.').catch(console.error);
       return;
     }
 
-    authorizedChatId = msg.chat.id;
-    pushCommand({ type: 'request_screenshot', payload: {} });
+    pushCommand({ userId: user.id, type: 'request_screenshot', payload: {} });
     bot!.sendMessage(msg.chat.id, '📸 Requesting screenshot from browser...').catch(console.error);
   });
 
@@ -233,10 +232,9 @@ export function startTelegramBot(token: string) {
   // Conversational Fallback
   bot.on('message', async (msg) => {
     if (!msg.text || msg.text.startsWith('/')) return;
-    authorizedChatId = msg.chat.id;
 
-    const authorized = await isAuthorized(msg.chat.id);
-    if (!authorized) {
+    const user = await getLinkedUser(msg.chat.id);
+    if (!user) {
       const authUrl = getTelegramLoginUrl(msg.chat.id);
       bot!.sendMessage(msg.chat.id,
         `🔒 Please sign in first!\n\n[👉 Click Here to Sign In](${authUrl})`,
@@ -248,7 +246,7 @@ export function startTelegramBot(token: string) {
     // Check if the user is asking for a screenshot colloquially
     const textLower = msg.text.toLowerCase();
     if (textLower.includes('screenshot') || textLower.includes('show me') || textLower.includes('photo')) {
-      pushCommand({ type: 'request_screenshot', payload: {} });
+      pushCommand({ userId: user.id, type: 'request_screenshot', payload: {} });
       bot!.sendMessage(msg.chat.id, '📸 Requesting live screenshot...').catch(console.error);
       return;
     }
@@ -260,8 +258,8 @@ export function startTelegramBot(token: string) {
     }
 
     try {
-      const status = getAgentStatus();
-      const logs = getRecentLogs(10).map(l => `[${l.timestamp.toISOString()}] ${l.isError ? 'ERROR: ' : ''}${l.message}`).join('\n');
+      const status = getAgentStatus(user.id);
+      const logs = getRecentLogs(user.id, 10).map(l => `[${l.timestamp.toISOString()}] ${l.isError ? 'ERROR: ' : ''}${l.message}`).join('\n');
 
       const systemPrompt = `You are the iApply Telegram Bot Assistant. You control a Chrome extension autonomously applying to LinkedIn jobs.
 Current Agent Status: ${status}
@@ -296,15 +294,19 @@ Respond conversationally to the user about what the agent is currently doing or 
   });
 
   // Subscribe to live agent logs and forward to Telegram
-  onAgentLog((log) => {
-    if (!bot || !authorizedChatId) return;
+  onAgentLog(async (log) => {
+    if (!bot) return;
     if (log.message.startsWith('Waiting')) return;
+
+    const linkedUser = await getUserById(log.userId);
+    const chatId = linkedUser?.telegram_chat_id;
+    if (!chatId) return;
 
     const emoji = log.isError ? '❌' : '▸';
     const time = log.timestamp.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const msgText = log.message.length > 300 ? log.message.slice(0, 300) + '...' : log.message;
 
-    bot.sendMessage(authorizedChatId, `\`${time}\` ${emoji} ${msgText}`, { parse_mode: 'Markdown' })
+    bot.sendMessage(chatId, `\`${time}\` ${emoji} ${msgText}`, { parse_mode: 'Markdown' })
       .catch(() => {});
   });
 
@@ -313,14 +315,20 @@ Respond conversationally to the user about what the agent is currently doing or 
   });
 }
 
-export function sendTelegramMessage(text: string) {
-  if (bot && authorizedChatId) {
-    bot.sendMessage(authorizedChatId, text, { parse_mode: 'Markdown' }).catch(() => {});
-  }
+export async function sendTelegramMessage(userId: string, text: string) {
+  if (!bot) return;
+
+  const linkedUser = await getUserById(userId);
+  if (!linkedUser?.telegram_chat_id) return;
+
+  bot.sendMessage(linkedUser.telegram_chat_id, text, { parse_mode: 'Markdown' }).catch(() => {});
 }
 
-export function sendTelegramPhoto(buffer: Buffer) {
-  if (bot && authorizedChatId) {
-    bot.sendPhoto(authorizedChatId, buffer, { caption: '📸 Live Agent Screenshot' }).catch(() => {});
-  }
+export async function sendTelegramPhoto(userId: string, buffer: Buffer) {
+  if (!bot) return;
+
+  const linkedUser = await getUserById(userId);
+  if (!linkedUser?.telegram_chat_id) return;
+
+  bot.sendPhoto(linkedUser.telegram_chat_id, buffer, { caption: '📸 Live Agent Screenshot' }).catch(() => {});
 }

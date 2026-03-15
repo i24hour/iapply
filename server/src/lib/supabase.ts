@@ -50,6 +50,17 @@ export async function getUserByTelegramId(telegramChatId: number) {
   return data;
 }
 
+export async function getUserById(userId: string) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .single();
+
+  if (error) return null;
+  return data;
+}
+
 // ─── Helper: link telegram chat ID to user ───────────────────────────────────
 export async function linkTelegramUser(userId: string, telegramChatId: number) {
   const { error } = await supabase
