@@ -14,7 +14,7 @@ Automated job application platform with AI-powered resume parsing and form filli
 ### Prerequisites
 
 - **Node.js** 18+
-- **MongoDB** (running locally or Atlas)
+- **Supabase** (running locally or via cloud project)
 
 ### 1. Install Dependencies
 
@@ -34,25 +34,13 @@ Edit `server/.env`:
 
 ```env
 PORT=3001
-MONGODB_URI=mongodb://127.0.0.1:27017/job-automation
+SUPABASE_URL=your-supabase-url
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-key
 JWT_SECRET=your-secret-key
 CLIENT_URL=http://localhost:3000
 ```
 
-### 3. Start MongoDB
-
-```bash
-# Windows
-net start MongoDB
-
-# macOS
-brew services start mongodb-community
-
-# Linux
-sudo systemctl start mongod
-```
-
-### 4. Start the App
+### 3. Start the App
 
 ```bash
 # Run from: jobs/
@@ -73,6 +61,7 @@ jobs/                 ← Run all commands from here
 ├── server/           # Express.js backend (port 3001)
 ├── extension/        # Chrome extension
 ├── ai-service/       # Python AI service
+├── supabase/         # Supabase migrations and schema
 └── shared/           # Shared types
 ```
 
@@ -120,12 +109,6 @@ Get-NetTCPConnection -LocalPort 3001 | ForEach-Object { Stop-Process -Id $_.Owni
 # macOS/Linux
 lsof -ti:3000 | xargs kill -9
 lsof -ti:3001 | xargs kill -9
-```
-
-### MongoDB connection failed
-
-```bash
-mongosh --eval "db.runCommand({ping:1})"
 ```
 
 ---

@@ -1,10 +1,8 @@
 import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { AutomationCommand } from '../models/AutomationCommand.js';
-import { Application } from '../models/Application.js';
-import { JobPreferences } from '../models/JobPreferences.js';
 import { createError } from '../middleware/error-handler.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
+import { supabase } from '../lib/supabase.js';
 
 const router = Router();
 
@@ -15,26 +13,28 @@ const startAutomationSchema = z.object({
 // Get automation status
 router.get('/status', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const activeCommand = await AutomationCommand.findOne({
-      userId: req.userId,
-      status: { $in: ['pending', 'in_progress'] },
-    }).sort({ createdAt: -1 });
+    const { data: activeCommand } = await supabase
+      .from('agent_sessions')
+      .select('*')
+      .eq('user_id', req.userId)
+      .in('status', ['running', 'idle'])
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .single();
 
-    const [applied, failed, total] = await Promise.all([
-      Application.countDocuments({ userId: req.userId, status: 'applied' }),
-      Application.countDocuments({ userId: req.userId, status: 'failed' }),
-      Application.countDocuments({ userId: req.userId }),
-    ]);
+    const { count: applied } = await supabase.from('applications').select('*', { count: 'exact', head: true }).eq('user_id', req.userId).eq('status', 'applied');
+    const { count: failed } = await supabase.from('applications').select('*', { count: 'exact', head: true }).eq('user_id', req.userId).eq('status', 'failed');
+    const { count: total } = await supabase.from('applications').select('*', { count: 'exact', head: true }).eq('user_id', req.userId);
 
     res.json({
       success: true,
       data: {
         isRunning: !!activeCommand,
-        currentAction: activeCommand?.action,
-        jobsScraped: total,
-        jobsApplied: applied,
-        jobsFailed: failed,
-        startedAt: activeCommand?.createdAt,
+        currentAction: activeCommand?.status === 'running' ? 'applying' : 'idle',
+        jobsScraped: total || 0,
+        jobsApplied: applied || 0,
+        jobsFailed: failed || 0,
+        startedAt: activeCommand?.started_at,
       },
     });
   } catch (error) {
@@ -47,32 +47,42 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
   try {
     const { count } = startAutomationSchema.parse(req.body);
 
-    const activeCommand = await AutomationCommand.findOne({
-      userId: req.userId,
-      status: { $in: ['pending', 'in_progress'] },
-    });
+    const { data: activeCommand } = await supabase
+      .from('agent_sessions')
+      .select('*')
+      .eq('user_id', req.userId)
+      .in('status', ['running', 'idle'])
+      .limit(1)
+      .single();
 
     if (activeCommand) {
       throw createError('Automation is already running', 400);
     }
 
-    const preferences = await JobPreferences.findOne({ userId: req.userId });
+    const { data: preferences } = await supabase.from('job_preferences').select('*').eq('user_id', req.userId).single();
 
-    const command = await AutomationCommand.create({
-      userId: req.userId!,
-      action: 'scrape_jobs',
-      payload: {
-        count,
-        roles: preferences?.roles || [],
-        locations: preferences?.locations || [],
-      },
-      status: 'pending',
+    const searchQuery = JSON.stringify({
+      count,
+      roles: preferences?.roles || [],
+      locations: preferences?.locations || []
     });
+
+    const { data: command, error } = await supabase.from('agent_sessions').insert({
+      user_id: req.userId,
+      search_query: searchQuery,
+      applications_count: count,
+      status: 'idle',
+    }).select().single();
+
+    if (error) {
+      console.error('Supabase error inserting agent_session:', error);
+      throw createError('Failed to start automation', 500);
+    }
 
     res.json({
       success: true,
       data: {
-        commandId: command._id,
+        commandId: command?.id,
         message: `Started automation to apply to ${count} jobs`,
       },
     });
@@ -90,10 +100,11 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
 // Pause automation
 router.post('/pause', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    await AutomationCommand.updateMany(
-      { userId: req.userId, status: { $in: ['pending', 'in_progress'] } },
-      { status: 'completed' }
-    );
+    await supabase
+      .from('agent_sessions')
+      .update({ status: 'stopped' })
+      .eq('user_id', req.userId)
+      .in('status', ['idle', 'running']);
 
     res.json({ success: true, message: 'Automation paused' });
   } catch (error) {
@@ -104,10 +115,11 @@ router.post('/pause', authenticate, async (req: AuthRequest, res: Response, next
 // Stop automation
 router.post('/stop', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    await AutomationCommand.updateMany(
-      { userId: req.userId, status: { $in: ['pending', 'in_progress'] } },
-      { status: 'completed' }
-    );
+    await supabase
+      .from('agent_sessions')
+      .update({ status: 'stopped' })
+      .eq('user_id', req.userId)
+      .in('status', ['idle', 'running']);
 
     res.json({ success: true, message: 'Automation stopped' });
   } catch (error) {

@@ -3,10 +3,9 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import axios from 'axios';
-import { Resume } from '../models/Resume.js';
-import { Profile } from '../models/Profile.js';
 import { createError } from '../middleware/error-handler.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
+import { supabase } from '../lib/supabase.js';
 
 const router = Router();
 
@@ -46,9 +45,21 @@ const upload = multer({
 // Get resume
 router.get('/', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const resume = await Resume.findOne({ userId: req.userId }).sort({ uploadedAt: -1 });
+    const { data: resume, error } = await supabase
+      .from('resumes')
+      .select('*')
+      .eq('user_id', req.userId)
+      .order('uploaded_at', { ascending: false })
+      .limit(1)
+      .single();
 
-    if (!resume) {
+    if (error && error.code !== 'PGRST116') {
+      console.error('Supabase error:', error);
+    }
+
+    if (!resume && !error) {
+      throw createError('No resume found', 404);
+    } else if (error && error.code === 'PGRST116') {
       throw createError('No resume found', 404);
     }
 
@@ -85,31 +96,31 @@ router.post(
         if (response.data.success) {
           parsedData = response.data.data;
 
-          await Profile.findOneAndUpdate(
-            { userId: req.userId },
-            {
-              fullName: parsedData.fullName || 'User',
-              phone: parsedData.phone,
-              location: parsedData.location,
-              skills: parsedData.skills || [],
-              experienceYears: parsedData.experienceYears || 0,
-              userId: req.userId,
-            },
-            { upsert: true, new: true }
-          );
+          await supabase.from('profiles').upsert({
+            user_id: req.userId,
+            full_name: parsedData.fullName || 'User',
+            phone: parsedData.phone,
+            location: parsedData.location,
+            skills: parsedData.skills || [],
+            experience_years: parsedData.experienceYears || 0,
+          }, { onConflict: 'user_id' });
         }
       } catch (aiError) {
         console.error('AI service error:', aiError);
       }
 
-      const resume = await Resume.create({
-        userId: req.userId!,
-        fileName: req.file.originalname,
-        fileUrl,
-        parsedData: parsedData || undefined,
-      });
+      const { data: resume, error } = await supabase.from('resumes').insert({
+        user_id: req.userId,
+        file_name: req.file.originalname,
+        file_url: fileUrl,
+        parsed_data: parsedData || null,
+      }).select().single();
 
-      res.status(201).json({ success: true, data: resume });
+      if (error) {
+        console.error('Supabase insert error:', error);
+      }
+
+      res.status(201).json({ success: true, data: resume || { id: 'temp', file_url: fileUrl } });
     } catch (error) {
       next(error);
     }

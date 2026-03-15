@@ -12,7 +12,6 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-// import { connectDB } from './lib/mongodb.js'; // disabled for local dev (no DB needed)
 import { errorHandler } from './middleware/error-handler.js';
 import authRouter from './routes/auth.js';
 import profileRouter from './routes/profile.js';
@@ -57,7 +56,6 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 async function start() {
-  // await connectDB(); // disabled for local dev
   const portToBind = typeof PORT === 'string' ? parseInt(PORT) : PORT;
   app.listen(portToBind, '0.0.0.0', () => {
     console.log(`🚀 Server running on http://0.0.0.0:${PORT} (in-memory mode)`);

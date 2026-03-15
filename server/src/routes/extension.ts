@@ -2,34 +2,39 @@ import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
-import { AutomationCommand } from '../models/AutomationCommand.js';
-import { Job } from '../models/Job.js';
-import { Application } from '../models/Application.js';
 import { createError } from '../middleware/error-handler.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
+import { supabase } from '../lib/supabase.js';
 
 const router = Router();
 
 // Get pending commands for extension
 router.get('/commands', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const command = await AutomationCommand.findOne({
-      userId: req.userId,
-      status: 'pending',
-    }).sort({ createdAt: 1 });
+    const { data: command } = await supabase
+      .from('agent_sessions')
+      .select('*')
+      .eq('user_id', req.userId)
+      .eq('status', 'idle')
+      .order('started_at', { ascending: true })
+      .limit(1)
+      .single();
 
     if (!command) {
       return res.json({ success: true, data: null });
     }
 
-    await AutomationCommand.updateOne({ _id: command._id }, { status: 'in_progress' });
+    await supabase
+      .from('agent_sessions')
+      .update({ status: 'running' })
+      .eq('id', command.id);
 
     res.json({
       success: true,
       data: {
-        id: command._id,
-        action: command.action,
-        payload: command.payload,
+        id: command.id,
+        action: 'scrape_jobs',
+        payload: JSON.parse(command.search_query || '{}'),
       },
     });
   } catch (error) {
@@ -40,13 +45,20 @@ router.get('/commands', authenticate, async (req: AuthRequest, res: Response, ne
 // Update command status
 router.post('/commands/:id/complete', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const command = await AutomationCommand.findById(req.params.id);
+    const { data: command, error } = await supabase
+      .from('agent_sessions')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
 
-    if (!command || command.userId.toString() !== req.userId) {
+    if (!command || command.user_id !== req.userId) {
       throw createError('Command not found', 404);
     }
 
-    await AutomationCommand.updateOne({ _id: req.params.id }, { status: 'completed' });
+    await supabase
+      .from('agent_sessions')
+      .update({ status: 'stopped' })
+      .eq('id', req.params.id);
 
     res.json({ success: true });
   } catch (error) {
@@ -73,26 +85,40 @@ router.post('/jobs', authenticate, async (req: AuthRequest, res: Response, next:
   try {
     const { jobs } = submitJobsSchema.parse(req.body);
 
-    const createdJobs = await Promise.all(
-      jobs.map(async (job) => {
-        return Job.findOneAndUpdate(
-          { platform: job.platform, externalId: job.externalId },
-          job,
-          { upsert: true, new: true }
-        );
-      })
-    );
+    const createdJobs = [];
+
+    for (const job of jobs) {
+      const { data: upsertedJob, error } = await supabase
+        .from('jobs')
+        .upsert({
+          platform: job.platform,
+          external_id: job.externalId,
+          company: job.company,
+          title: job.title,
+          description: job.description,
+          location: job.location,
+          url: job.url,
+          salary: job.salary,
+          is_easy_apply: job.isEasyApply
+        }, { onConflict: 'platform,external_id' })
+        .select()
+        .single();
+      
+      if (upsertedJob) {
+        createdJobs.push(upsertedJob);
+      }
+    }
 
     // Create pending applications (skip duplicates)
-    await Promise.all(
-      createdJobs.map((job) =>
-        Application.findOneAndUpdate(
-          { userId: req.userId, jobId: job._id },
-          { userId: req.userId, jobId: job._id, status: 'pending' },
-          { upsert: true, new: true }
-        ).catch(() => {})
-      )
-    );
+    for (const job of createdJobs) {
+      await supabase
+        .from('applications')
+        .upsert({
+          user_id: req.userId,
+          job_id: job.id,
+          status: 'pending'
+        }, { onConflict: 'user_id,job_id', ignoreDuplicates: true });
+    }
 
     res.json({
       success: true,
@@ -136,17 +162,19 @@ router.post('/application', authenticate, async (req: AuthRequest, res: Response
       screenshotUrl = `/uploads/screenshots/${filename}`;
     }
 
-    const result = await Application.updateMany(
-      { userId: req.userId, jobId },
-      {
+    const { data: result, error } = await supabase
+      .from('applications')
+      .update({
         status: wasSuccessful ? 'applied' : 'failed',
-        screenshotUrl,
-        appliedAt: wasSuccessful ? new Date() : undefined,
-        errorMessage,
-      }
-    );
+        screenshot_url: screenshotUrl,
+        applied_at: wasSuccessful ? new Date().toISOString() : null,
+        error_message: errorMessage,
+      })
+      .eq('user_id', req.userId)
+      .eq('job_id', jobId)
+      .select();
 
-    res.json({ success: true, data: { updated: result.modifiedCount } });
+    res.json({ success: true, data: { updated: result?.length || 0 } });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({
@@ -161,16 +189,18 @@ router.post('/application', authenticate, async (req: AuthRequest, res: Response
 // Get pending jobs to apply
 router.get('/jobs/pending', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const applications = await Application.find({
-      userId: req.userId,
-      status: 'pending',
-    }).populate('jobId').limit(10);
+    const { data: applications } = await supabase
+      .from('applications')
+      .select('*, jobs(*)')
+      .eq('user_id', req.userId)
+      .eq('status', 'pending')
+      .limit(10);
 
     res.json({
       success: true,
-      data: applications.map((app) => ({
-        applicationId: app._id,
-        job: app.jobId,
+      data: (applications || []).map((app: any) => ({
+        applicationId: app.id,
+        job: app.jobs,
       })),
     });
   } catch (error) {
