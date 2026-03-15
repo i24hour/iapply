@@ -39,17 +39,17 @@ export default function HomePage() {
       </header>
 
       {/* Hero Section */}
-      <section className="py-20 px-4">
+      <section className="py-12 md:py-20 px-4">
         <div className="max-w-4xl mx-auto text-center">
-          <h1 className="text-5xl font-bold text-gray-900 mb-6">
+          <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4 md:mb-6">
             Automate Your Job Search
           </h1>
-          <p className="text-xl text-gray-600 mb-8">
+          <p className="text-lg md:text-xl text-gray-600 mb-8">
             Upload your resume, set your preferences, and let AI apply to hundreds of jobs while you focus on what matters.
           </p>
           <Link
             href="/login"
-            className="inline-flex items-center gap-2 bg-primary-600 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-primary-700 transition"
+            className="inline-flex items-center gap-2 bg-primary-600 text-white px-6 py-3 md:px-8 md:py-4 rounded-lg text-base md:text-lg font-semibold hover:bg-primary-700 transition"
           >
             Start Applying Now
             <ArrowRight className="h-5 w-5" />
@@ -58,7 +58,7 @@ export default function HomePage() {
       </section>
 
       {/* Features */}
-      <section className="py-16 bg-white">
+      <section className="py-12 md:py-16 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <h2 className="text-3xl font-bold text-center mb-12">How It Works</h2>
           <div className="grid md:grid-cols-3 gap-8">
@@ -82,9 +82,9 @@ export default function HomePage() {
       </section>
 
       {/* CTA Section */}
-      <section className="py-20 bg-primary-600">
+      <section className="py-16 md:py-20 bg-primary-600">
         <div className="max-w-4xl mx-auto text-center px-4">
-          <h2 className="text-3xl font-bold text-white mb-4">
+          <h2 className="text-2xl md:text-3xl font-bold text-white mb-4">
             Ready to Land Your Dream Job?
           </h2>
           <p className="text-primary-100 mb-8">
@@ -92,7 +92,7 @@ export default function HomePage() {
           </p>
           <Link
             href="/login"
-            className="inline-flex items-center gap-2 bg-white text-primary-600 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-gray-100 transition"
+            className="inline-flex items-center gap-2 bg-white text-primary-600 px-6 py-3 md:px-8 md:py-4 rounded-lg text-base md:text-lg font-semibold hover:bg-gray-100 transition"
           >
             Get Started Free
             <ArrowRight className="h-5 w-5" />

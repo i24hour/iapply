@@ -373,9 +373,9 @@ export function ChatBot() {
   const showQuickActions = messages.length <= 1;
 
   return (
-    <div className="bg-white rounded-xl border flex flex-col" style={{ minHeight: '520px', maxHeight: 'calc(100vh - 280px)' }}>
+    <div className="bg-white rounded-xl border flex flex-col h-[500px] md:h-[600px] max-h-[calc(100vh-120px)] md:max-h-[calc(100vh-200px)]">
       {/* Header */}
-      <div className="flex items-center gap-3 px-6 py-4 border-b bg-gradient-to-r from-primary-50 to-white rounded-t-xl">
+      <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b bg-gradient-to-r from-primary-50 to-white rounded-t-xl">
         <div
           className={cn(
             'w-10 h-10 rounded-full flex items-center justify-center',
@@ -390,8 +390,8 @@ export function ChatBot() {
           />
         </div>
         <div className="flex-1">
-          <h2 className="text-lg font-semibold">Job Assistant</h2>
-          <p className="text-sm text-gray-500">
+          <h2 className="text-base sm:text-lg font-semibold">Job Assistant</h2>
+          <p className="text-xs sm:text-sm text-gray-500">
             {automationStatus.isRunning ? (
               <span className="text-green-600 flex items-center gap-1.5">
                 <span className="relative flex h-2 w-2">
@@ -417,7 +417,7 @@ export function ChatBot() {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-4">
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
@@ -459,7 +459,7 @@ export function ChatBot() {
 
       {/* Suggestion chips when automation is running */}
       {automationStatus.isRunning && (
-        <div className="px-6 pb-2 flex gap-2 flex-wrap">
+        <div className="px-4 sm:px-6 pb-2 flex gap-2 flex-wrap">
           {[
             { label: '📊 Status', cmd: 'status' },
             { label: '⏸ Pause', cmd: 'pause' },
@@ -478,7 +478,7 @@ export function ChatBot() {
       )}
 
       {/* Input */}
-      <div className="border-t px-6 py-4 bg-gray-50 rounded-b-xl">
+      <div className="border-t px-4 sm:px-6 py-3 sm:py-4 bg-gray-50 rounded-b-xl">
         <div className="flex items-center gap-3">
           <input
             ref={inputRef}
