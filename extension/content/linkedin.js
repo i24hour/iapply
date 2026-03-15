@@ -629,26 +629,68 @@ function isNumericInput(el) {
   return type === 'number' || inputMode === 'numeric' || /\\d|[0-9]/.test(pattern);
 }
 
-function pickFallbackValue(labelText, el) {
+function expectsNumericValue(labelText, el, errorText = '') {
+  const combined = `${labelText || ''} ${errorText || ''}`.toLowerCase();
+  return (
+    isNumericInput(el) ||
+    combined.includes('decimal') ||
+    combined.includes('numeric') ||
+    combined.includes('number') ||
+    combined.includes('integer') ||
+    combined.includes('ctc') ||
+    combined.includes('salary') ||
+    combined.includes('notice period') ||
+    combined.includes('experience')
+  );
+}
+
+function extractNumericValue(rawValue) {
+  const text = String(rawValue || '').replace(/,/g, ' ').trim();
+  const match = text.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return '';
+
+  const parsed = Number(match[0]);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return '1';
+  }
+
+  return match[0];
+}
+
+function normalizeValueForField(labelText, rawValue, el, errorText = '') {
+  const nextValue = String(rawValue || '').trim();
+  if (!nextValue) {
+    return pickFallbackValue(labelText, el, errorText);
+  }
+
+  if (expectsNumericValue(labelText, el, errorText)) {
+    return extractNumericValue(nextValue) || pickFallbackValue(labelText, el, errorText);
+  }
+
+  return nextValue;
+}
+
+function pickFallbackValue(labelText, el, errorText = '') {
   const label = (labelText || '').toLowerCase();
+  const numeric = expectsNumericValue(labelText, el, errorText);
 
   if (label.includes('expected ctc') || label.includes('expected salary')) {
-    return isNumericInput(el) ? '300000' : '300000';
+    return '300000';
   }
   if (label.includes('current ctc') || label.includes('current salary')) {
-    return isNumericInput(el) ? '200000' : '200000';
+    return '200000';
   }
   if (label.includes('notice period')) {
-    return isNumericInput(el) ? '1' : '1 month';
+    return numeric ? '1' : '1 month';
   }
   if (label.includes('year') || label.includes('experience')) {
-    return isNumericInput(el) ? '3' : '3 years';
+    return numeric ? '3' : '3 years';
   }
   if (label.includes('phone') || label.includes('mobile')) {
     return '9876543210';
   }
 
-  return isNumericInput(el) ? '1' : 'Yes';
+  return numeric ? '1' : 'Yes';
 }
 
 async function setInputValue(element, value) {
@@ -659,6 +701,59 @@ async function setInputValue(element, value) {
   await typeText(element, value);
   element.dispatchEvent(new Event('change', { bubbles: true }));
   element.dispatchEvent(new Event('blur', { bubbles: true }));
+}
+
+function fieldHasValidationError(field) {
+  const errorText = getInlineErrorText(field);
+  const invalid =
+    field.getAttribute('aria-invalid') === 'true' ||
+    field.getAttribute('data-test-form-element-error') === 'true' ||
+    Boolean(errorText) ||
+    (typeof field.checkValidity === 'function' && !field.checkValidity());
+
+  return {
+    invalid,
+    errorText,
+  };
+}
+
+async function setValidatedFieldValue(field, rawValue) {
+  const label = getFieldLabel(field);
+  const initialState = fieldHasValidationError(field);
+  const normalizedValue = normalizeValueForField(label, rawValue, field, initialState.errorText);
+
+  await setInputValue(field, normalizedValue);
+  await sleep(150);
+
+  let finalState = fieldHasValidationError(field);
+  if (finalState.invalid) {
+    const repairedValue = normalizeValueForField(label, field.value || normalizedValue, field, finalState.errorText);
+    if (repairedValue && repairedValue !== String(field.value || '').trim()) {
+      await setInputValue(field, repairedValue);
+      await sleep(150);
+      finalState = fieldHasValidationError(field);
+    }
+  }
+
+  if (finalState.invalid) {
+    const fallbackValue = pickFallbackValue(label, field, finalState.errorText);
+    if (fallbackValue && fallbackValue !== String(field.value || '').trim()) {
+      await setInputValue(field, fallbackValue);
+      await sleep(150);
+      finalState = fieldHasValidationError(field);
+    }
+  }
+
+  const finalValue = String(field.value || '').trim();
+  if (finalValue && finalValue !== String(rawValue || '').trim()) {
+    postAgentLog(`Auto-corrected ${label || 'field'} to "${finalValue}" after validation check.`);
+  }
+
+  return {
+    value: finalValue,
+    invalid: finalState.invalid,
+    errorText: finalState.errorText,
+  };
 }
 
 function getEasyApplyModal() {
@@ -750,9 +845,9 @@ async function autoFixModalValidationIssues() {
         continue;
       }
 
-      const fallback = pickFallbackValue(label, field);
+      const fallback = pickFallbackValue(label, field, issue.errorText);
       if (fallback) {
-        await setInputValue(field, fallback);
+        await setValidatedFieldValue(field, fallback);
         fixed++;
         details.push(`Filled ${label || 'required field'} with "${fallback}"`);
       }
@@ -868,14 +963,27 @@ async function executeAgentAction(decision) {
       }
       await humanClick(el);
     } else if (action === 'type') {
-      await typeText(el, value || '');
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+        const state = fieldHasValidationError(el);
+        const normalized = normalizeValueForField(getFieldLabel(el), value || '', el, state.errorText);
+        if (state.invalid || normalized !== String(value || '').trim()) {
+          await setValidatedFieldValue(el, value || '');
+        } else {
+          await typeText(el, value || '');
+        }
+      } else {
+        await typeText(el, value || '');
+      }
     } else if (action === 'clear_and_type') {
-      // Clear existing value first, then type new text
-      el.focus();
-      el.value = '';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      await sleep(300);
-      await typeText(el, value || '');
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+        await setValidatedFieldValue(el, value || '');
+      } else {
+        el.focus();
+        el.value = '';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(300);
+        await typeText(el, value || '');
+      }
     } else if (action === 'pressEnter') {
       el.focus();
       el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));

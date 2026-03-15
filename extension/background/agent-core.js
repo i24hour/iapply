@@ -173,7 +173,7 @@ RULES:
 4. Inside an Easy Apply modal, fill form fields and click "Next", "Review", or "Submit application".
 5. IMPORTANT: In the Easy Apply modal, only interact with elements that exist in the CURRENT SNAPSHOT. Do not try to answer questions from previous steps that are no longer visible.
 6. IMPORTANT: If a modal section (like Education or Experience) is already filled in or requires no further input, simply click the "Review", "Next", or "Continue" button at the bottom.
-7. CRITICAL: NEVER repeat the exact same "type" or "clear_and_type" action on the same field twice in a row. If the field's "value" in the CURRENT PAGE snapshot already shows your answer (e.g., value="10"), DO NOT type it again. You MUST move on and click "Review" or "Next".
+7. CRITICAL: NEVER repeat the exact same "type" or "clear_and_type" action on the same field twice in a row UNLESS the CURRENT SNAPSHOT still marks that field invalid or shows an error message for it. If the field's "value" in the CURRENT PAGE snapshot already shows your answer (e.g., value="10") and the field is not invalid, DO NOT type it again.
 8. SUCCESS STATE: If you see "Your application was sent" or "Applied", you MUST click the "Done" button or the "Dismiss" / "Close" (X) button to close the modal. DO NOT try to answer anymore questions on this success screen.
 9. After closing the success modal, look for the next job listing with "Easy Apply" and click it to start a new application.
 10. You can use "navigate" action with a URL as value to go to a different page.
@@ -184,6 +184,7 @@ RULES:
 14. For radio buttons, click the specific radio option (e.g., click the element with text "Yes").
 15. After filling ALL new fields in a modal step, always click the primary action button ("Next", "Continue", "Review", or "Submit").
 16. If CURRENT PAGE text contains "FORM_VALIDATION_ERRORS", do NOT click Review/Next/Submit until those specific fields are fixed.
+17. If a field label or error mentions decimal, numeric, number, salary, CTC, notice period, or experience, enter digits only. Example: use "1" instead of "1 month".
 ${stuckHint}
 
 AVAILABLE ACTIONS:
