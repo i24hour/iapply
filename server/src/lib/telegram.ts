@@ -6,6 +6,11 @@ import { supabase, getUserByTelegramId, linkTelegramUser } from './supabase.js';
 let bot: TelegramBot | null = null;
 let authorizedChatId: number | null = null;
 
+function getTelegramLoginUrl(chatId: number) {
+  const clientUrl = process.env.CLIENT_URL || 'https://iapply.onrender.com';
+  return `${clientUrl}/login?telegram_id=${chatId}`;
+}
+
 export function startTelegramBot(token: string) {
   if (!token || token === 'your-telegram-bot-token') {
     console.log('⚠️  No Telegram bot token set. Skipping Telegram integration.');
@@ -30,7 +35,7 @@ export function startTelegramBot(token: string) {
       return;
     }
 
-    const authUrl = `${process.env.APP_URL || 'https://iapply-telegram-bot.onrender.com'}/auth/google?telegram_id=${msg.chat.id}`;
+    const authUrl = getTelegramLoginUrl(msg.chat.id);
     bot!.sendMessage(msg.chat.id,
       `🚀 *iApply Agent Bot*\n\n` +
       `Welcome! To get started, you need to authenticate securely.\n\n` +
@@ -53,7 +58,7 @@ export function startTelegramBot(token: string) {
   // /apply command — starts the agent
   bot.onText(/\/apply (.+)/, async (msg, match) => {
     if (!await isAuthorized(msg.chat.id)) {
-      const authUrl = `${process.env.APP_URL || 'https://iapply-telegram-bot.onrender.com'}/auth/google?telegram_id=${msg.chat.id}`;
+      const authUrl = getTelegramLoginUrl(msg.chat.id);
       bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
       return;
     }
@@ -86,7 +91,7 @@ export function startTelegramBot(token: string) {
   // /stop command
   bot.onText(/\/stop/, async (msg) => {
     if (!await isAuthorized(msg.chat.id)) {
-      const authUrl = `${process.env.APP_URL || 'https://iapply-telegram-bot.onrender.com'}/auth/google?telegram_id=${msg.chat.id}`;
+      const authUrl = getTelegramLoginUrl(msg.chat.id);
       bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
       return;
     }
@@ -161,7 +166,7 @@ export function startTelegramBot(token: string) {
 
     const authorized = await isAuthorized(msg.chat.id);
     if (!authorized) {
-      const authUrl = `${process.env.APP_URL || 'https://iapply-telegram-bot.onrender.com'}/auth/google?telegram_id=${msg.chat.id}`;
+      const authUrl = getTelegramLoginUrl(msg.chat.id);
       bot!.sendMessage(msg.chat.id,
         `🔒 Please sign in first!\n\n[👉 Click Here to Sign In](${authUrl})`,
         { parse_mode: 'Markdown', disable_web_page_preview: true }
