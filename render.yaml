@@ -1,0 +1,30 @@
+services:
+  # Frontend Service
+  - type: web
+    name: iapply-frontend # Make sure this matches your Render service name
+    env: node
+    buildFilter:
+      paths:
+        - client/**
+        - shared/**
+        - package.json
+        - package-lock.json
+
+  # Backend Service
+  - type: web
+    name: iapply-backend # Make sure this matches your Render service name
+    env: node
+    buildFilter:
+      paths:
+        - server/**
+        - shared/**
+        - package.json
+        - package-lock.json
+        
+  # AI Service (If deployed on Render)
+  - type: web
+    name: iapply-ai-service # Make sure this matches your Render service name
+    env: python
+    buildFilter:
+      paths:
+        - ai-service/**
