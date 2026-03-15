@@ -106,7 +106,7 @@ router.get('/callback', async (req, res) => {
 
   if (telegramId) {
     res.clearCookie('telegram_auth_id');
-    return res.redirect('tg://resolve?domain=infiniteapplybot&start=success');
+    return res.redirect('https://t.me/infiniteapplybot?start=success');
   }
 
   // Redirect to frontend auth success page with session tokens in the URL hash
