@@ -2,8 +2,17 @@ import { startAgent, stopAgent, getAgentStatus } from './agent-core.js';
 
 const API_URL = 'https://iapply-telegram-bot.onrender.com';
 const TELEGRAM_POLL_INTERVAL = 5000;
+const MAX_LOG_ENTRIES = 300;
 
 let telegramPollTimer = null;
+let agentLogs = [];
+
+function appendAgentLog(message, isError = false) {
+  agentLogs.push({ message, isError, timestamp: Date.now() });
+  if (agentLogs.length > MAX_LOG_ENTRIES) {
+    agentLogs = agentLogs.slice(-MAX_LOG_ENTRIES);
+  }
+}
 
 // ─── JWT helper: get the stored Supabase access token ────────────────────────
 async function getAuthHeaders() {
@@ -19,15 +28,22 @@ async function getAuthHeaders() {
 // Listen for messages from popup or content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'start_agent') {
+    agentLogs = [];
+    appendAgentLog('Agent start requested.');
     startAgent(message.config);
     sendResponse({ success: true });
   } else if (message.action === 'stop_agent') {
+    appendAgentLog('Agent stop requested.');
     stopAgent();
     sendResponse({ success: true });
   } else if (message.action === 'get_agent_status') {
     sendResponse(getAgentStatus());
     return true;
+  } else if (message.action === 'get_agent_logs') {
+    sendResponse({ success: true, logs: agentLogs });
+    return true;
   } else if (message.action === 'agent_log') {
+    appendAgentLog(message.message, message.isError);
     forwardLogToBackend(message.message, message.isError);
   } else if (message.action === 'set_token') {
     // Called by popup after Google OAuth to save the JWT

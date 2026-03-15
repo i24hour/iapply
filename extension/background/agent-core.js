@@ -23,21 +23,43 @@ export async function startAgent(config) {
   settings = config;
   agentState = 'NAVIGATING';
   stepCount = 0;
-  currentGoal = `Find and apply to "${settings.searchQuery}" jobs on LinkedIn using Easy Apply.`;
-  
-  broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
-  
-  // Step 1: Navigate to LinkedIn Jobs search
-  const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(settings.searchQuery)}&f_AL=true`;
-  broadcastLog(`Navigating to LinkedIn Jobs search...`);
-  
-  const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
-  if (tabs.length > 0) {
-    await chrome.tabs.update(tabs[0].id, { url: searchUrl });
+
+  const isOutreach = settings.mode === 'post_outreach';
+
+  if (isOutreach) {
+    // Title is the primary search term; keywords are secondary
+    const primaryTerm = settings.postTitle || settings.relatedKeywords || 'software';
+    const keywordPart = settings.relatedKeywords && settings.postTitle
+      ? ` Also consider secondary keywords: "${settings.relatedKeywords}".`
+      : '';
+    currentGoal = `Scroll through the LinkedIn feed continuously. For every post, read its description text. Only engage with posts whose description contains the title "${primaryTerm}" OR any of these keywords: "${[settings.postTitle, settings.relatedKeywords].filter(Boolean).join(', ')}". If a matching post asks users to comment "interested", comment "interested", or asks for gmail/email, post the configured outreach email "${settings.outreachEmail || ''}" when available. If no outreach email is configured, comment "Interested. Please check DM." Then continue to more posts. Do NOT apply for jobs.`;
+
+    // Go to LinkedIn feed so the agent scrolls through real posts
+    const feedUrl = `https://www.linkedin.com/feed/`;
+    broadcastLog(`[Post Outreach] Navigating to LinkedIn feed to scroll and match posts...`);
+    const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
+    if (tabs.length > 0) {
+      await chrome.tabs.update(tabs[0].id, { url: feedUrl });
+    } else {
+      await chrome.tabs.create({ url: feedUrl });
+    }
   } else {
-    await chrome.tabs.create({ url: searchUrl });
+    const timeLabel = { r86400: 'past 24 hours', r604800: 'past week', r2592000: 'past month' }[settings.jobPostedTime] || 'any time';
+    currentGoal = `Find and apply to "${settings.searchQuery}" jobs on LinkedIn using Easy Apply (posted: ${timeLabel}).`;
+
+    // Build job search URL — add f_TPR time filter if selected
+    let searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(settings.searchQuery)}&f_AL=true`;
+    if (settings.jobPostedTime) searchUrl += `&f_TPR=${settings.jobPostedTime}`;
+    broadcastLog(`Navigating to LinkedIn Jobs search (posted: ${timeLabel})...`);
+    const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
+    if (tabs.length > 0) {
+      await chrome.tabs.update(tabs[0].id, { url: searchUrl });
+    } else {
+      await chrome.tabs.create({ url: searchUrl });
+    }
   }
-  
+
+  broadcastLog(`Starting with config: ${settings.provider} / ${settings.model} | Mode: ${settings.mode || 'job_apply'}`);
   // Wait for page to load before starting loop
   setTimeout(runAgentLoop, 5000);
 }
@@ -61,7 +83,8 @@ async function runAgentLoop() {
   if (agentState === 'IDLE') return;
   
   stepCount++;
-  if (stepCount > MAX_STEPS) {
+  const isOutreach = settings.mode === 'post_outreach';
+  if (!isOutreach && stepCount > MAX_STEPS) {
     broadcastLog('Max steps reached. Stopping.', true);
     agentState = 'IDLE';
     chrome.runtime.sendMessage({ action: 'agent_error', error: 'Max steps reached' }).catch(() => {});
@@ -113,10 +136,17 @@ async function runAgentLoop() {
 
     // 4. Execute Action
     if (decision.action === 'navigate') {
-      broadcastLog(`Navigating to: ${decision.value}`);
+      const targetUrl = decision.value || '';
+      // Guard: in post outreach mode, never navigate to the jobs section
+      if (settings.mode === 'post_outreach' && /linkedin\.com\/jobs[\/?]/i.test(targetUrl)) {
+        broadcastLog(`[Post Outreach] Blocked navigation to jobs section: ${targetUrl}`, true);
+        setTimeout(runAgentLoop, 2000);
+        return;
+      }
+      broadcastLog(`Navigating to: ${targetUrl}`);
       const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
       if (tabs.length > 0) {
-        await chrome.tabs.update(tabs[0].id, { url: decision.value });
+        await chrome.tabs.update(tabs[0].id, { url: targetUrl });
       }
       setTimeout(runAgentLoop, 5000);
       return;
@@ -130,6 +160,22 @@ async function runAgentLoop() {
     }
 
     if (decision.action !== 'wait') {
+      // Guard: in post outreach mode, skip any click on Easy Apply or job-apply elements
+      if (settings.mode === 'post_outreach') {
+        const blockedText = /easy apply|apply now|submit application/i;
+        if (decision.action === 'click' && blockedText.test(decision.reasoning || '')) {
+          broadcastLog(`[Post Outreach] Blocked click on job-apply element. Skipping.`, true);
+          setTimeout(runAgentLoop, 2000);
+          return;
+        }
+        // Also check element value/text from snapshot
+        const clickedEl = snapshot.elements.find(e => e.id === decision.elementId);
+        if (decision.action === 'click' && clickedEl && blockedText.test(clickedEl.text || '')) {
+          broadcastLog(`[Post Outreach] Blocked click on "${clickedEl.text}". Skipping.`, true);
+          setTimeout(runAgentLoop, 2000);
+          return;
+        }
+      }
       await executeActionInActiveTab(decision);
     }
     
@@ -161,12 +207,39 @@ YOUR GOAL: ${currentGoal}
 CURRENT PAGE:
 - URL: ${snapshot.url}
 - Title: ${snapshot.title}
-- Page text (first 1500 chars): ${snapshot.rawText.substring(0, 1500)}
+- Page text (first ${settings.mode === 'post_outreach' ? '3000' : '1500'} chars):
+${snapshot.rawText.substring(0, settings.mode === 'post_outreach' ? 3000 : 1500)}
 
 INTERACTIVE ELEMENTS ON PAGE (id, tag, text):
 ${snapshot.elements.map(e => `[${e.id}] <${e.tag}${e.type ? ' type=' + e.type : ''}${e.role ? ' role=' + e.role : ''}> "${e.text}"${e.label ? ' label="' + e.label + '"' : ''}${e.value ? ' value="' + e.value + '"' : ''}${e.required ? ' required=true' : ''}${e.invalid ? ' invalid=true' : ''}${e.errorText ? ' error="' + e.errorText + '"' : ''}`).join('\n')}
 
 RULES:
+${settings.mode === 'post_outreach' ? `
+⚠️  MODE: POST OUTREACH — Scroll the LinkedIn feed, read post descriptions, and engage only with posts that match the target keywords.
+
+TARGET TITLE (primary): "${settings.postTitle || ''}"
+TARGET KEYWORDS (secondary): "${settings.relatedKeywords || ''}"
+
+POST OUTREACH RULES (STRICTLY FOLLOW):
+PO-1. NEVER navigate to any URL containing "/jobs/" — the LinkedIn Jobs section is completely OFF-LIMITS.
+PO-2. NEVER click any button labelled "Easy Apply", "Apply", "Apply now", or "Submit application".
+PO-3. NEVER open or fill any job application form or modal.
+PO-4. If you land on the jobs section by mistake, immediately navigate back to: https://www.linkedin.com/feed/
+PO-5. If you see a post with an embedded job link, IGNORE that link entirely. Do not click it.
+PO-6. READING POSTS: Look at each post's visible text in the page content above. Read the description of every post carefully.
+PO-7. KEYWORD MATCHING: A post is RELEVANT if its description contains the target title "${settings.postTitle || ''}" OR any of these keywords: "${settings.relatedKeywords || ''}". Match is case-insensitive.
+PO-8. RELEVANT POST → ENGAGE: If a post is relevant, do ONE of these actions:
+   a) Click the "Like" button on that post, OR
+   b) Click the "Comment" button and type a short, genuine comment using one of the keywords naturally, OR
+   c) Click "Connect" or "Follow" on the post author.
+PO-9. SPECIAL COMMENT INSTRUCTIONS: If a relevant post explicitly says "comment interested", then comment exactly "Interested".
+PO-10. SPECIAL EMAIL INSTRUCTIONS: If a relevant post asks users to comment "gmail" or "email", then:
+  a) If outreach email is configured (${settings.outreachEmail || 'not configured'}), comment with that email.
+  b) If outreach email is NOT configured, comment: "Interested. Please check DM."
+PO-11. NON-RELEVANT POST → SKIP: If a post does NOT match the keywords, do NOT engage. Use "scroll" to move to the next post.
+PO-12. After engaging with a post (or skipping it), always use "scroll" to move further down the feed and find the next post.
+PO-13. Keep scrolling and repeating this read -> match -> engage/skip loop continuously until user stops the agent.
+` : `
 1. If the page shows "No results found", click "Clear all filters" or change the search query.
 2. If you see job listings, click on one that has "Easy Apply" in its text.
 3. If you see an "Easy Apply" button on a job detail page, click it to start applying.
@@ -184,6 +257,7 @@ RULES:
 14. For radio buttons, click the specific radio option (e.g., click the element with text "Yes").
 15. After filling ALL new fields in a modal step, always click the primary action button ("Next", "Continue", "Review", or "Submit").
 16. If CURRENT PAGE text contains "FORM_VALIDATION_ERRORS", do NOT click Review/Next/Submit until those specific fields are fixed.
+`}
 ${stuckHint}
 
 AVAILABLE ACTIONS:
@@ -226,6 +300,14 @@ async function callGemini(prompt) {
 
   if (!res.ok) {
     const err = await res.text();
+    const normalized = (err || '').toLowerCase();
+    if (
+      normalized.includes('api key expired') ||
+      normalized.includes('api_key_invalid') ||
+      normalized.includes('invalid api key')
+    ) {
+      throw new Error('Gemini API key is invalid or expired. Update the key in Extension popup -> LLM Configuration -> API Key, then click Save Settings and restart the agent.');
+    }
     throw new Error(`Gemini API Error: ${err}`);
   }
 

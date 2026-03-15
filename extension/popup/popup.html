@@ -63,7 +63,7 @@
       </div>
       <div class="form-group">
         <label>API Key</label>
-        <input type="password" id="apiKey" value="AIzaSyC2beBQtRf6iynqCaP5Ykx-54nrwMc8HU0" placeholder="sk-...">
+        <input type="password" id="apiKey" value="" placeholder="Enter your API key">
       </div>
       <div class="form-group">
         <label>Model</label>
@@ -81,10 +81,50 @@
       <div class="panel-title">Agent Control</div>
       
       <div class="form-group">
-        <label>Job Search Query</label>
-        <input type="text" id="searchQuery" placeholder="Frontend Developer Remote">
+        <label>Mode</label>
+        <select id="agentMode">
+          <option value="job_apply" selected>Job Apply (LinkedIn Easy Apply)</option>
+          <option value="post_outreach">Post Outreach (Search &amp; Engage Posts)</option>
+        </select>
       </div>
-      
+
+      <!-- Job Apply search (hidden in post_outreach mode) -->
+      <div id="jobSearchField">
+        <div class="form-group">
+          <label>Job Search Query</label>
+          <input type="text" id="searchQuery" placeholder="Frontend Developer Remote">
+        </div>
+      </div>
+
+      <!-- Post Outreach fields (hidden by default) -->
+      <div id="outreachExtraFields" style="display:none;">
+        <div class="form-group">
+          <label>Title <span style="color:#6b7280;font-weight:400;">(primary search)</span></label>
+          <input type="text" id="postTitle" placeholder="e.g. Frontend Developer, React Engineer">
+        </div>
+        <div class="form-group">
+          <label>Keywords <span style="color:#6b7280;font-weight:400;">(secondary)</span></label>
+          <input type="text" id="relatedKeywords" placeholder="e.g. hiring, open to work, remote">
+        </div>
+        <div class="form-group">
+          <label>Outreach Email <span style="color:#6b7280;font-weight:400;">(optional, for "comment gmail/email" posts)</span></label>
+          <input type="text" id="outreachEmail" placeholder="yourname@gmail.com">
+        </div>
+      </div>
+
+      <!-- Job Apply time filter (hidden by default, shown in job_apply mode) -->
+      <div id="jobTimeField" style="display:none;">
+        <div class="form-group">
+          <label>Job Posted Time</label>
+          <select id="jobPostedTime">
+            <option value="">Any Time</option>
+            <option value="r86400">Past 24 Hours</option>
+            <option value="r604800">Past Week</option>
+            <option value="r2592000">Past Month</option>
+          </select>
+        </div>
+      </div>
+
       <div class="status-container">
         <span style="font-size: 13px; font-weight:500;">Status</span>
         <div class="status-indicator">
