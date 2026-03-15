@@ -5,9 +5,42 @@ import { getUserById, getUserByTelegramId, countLinkedTelegramUsers } from './su
 
 let bot: TelegramBot | null = null;
 
+function isLocalUrl(url?: string) {
+  return !!url && (url.includes('localhost') || url.includes('127.0.0.1'));
+}
+
+function getPublicClientUrl() {
+  const telegramClientUrl = process.env.TELEGRAM_CLIENT_URL?.trim();
+  if (telegramClientUrl) {
+    return telegramClientUrl;
+  }
+
+  const clientUrl = process.env.CLIENT_URL?.trim();
+  if (clientUrl && !isLocalUrl(clientUrl)) {
+    return clientUrl;
+  }
+
+  return 'https://iapply.onrender.com';
+}
+
 function getTelegramLoginUrl(chatId: number) {
-  const clientUrl = process.env.CLIENT_URL || 'https://iapply.onrender.com';
+  const clientUrl = getPublicClientUrl();
   return `${clientUrl}/login?telegram_id=${chatId}`;
+}
+
+function sendSignInPrompt(chatId: number, text = '🔒 Please sign in first!') {
+  if (!bot) return;
+
+  bot.sendMessage(
+    chatId,
+    `${text}\n\nTap the button below to continue.`,
+    {
+      disable_web_page_preview: true,
+      reply_markup: {
+        inline_keyboard: [[{ text: 'Sign In', url: getTelegramLoginUrl(chatId) }]],
+      },
+    }
+  ).catch(console.error);
 }
 
 export async function refreshBotProfile() {
@@ -56,13 +89,17 @@ export function startTelegramBot(token: string) {
       return;
     }
 
-    const authUrl = getTelegramLoginUrl(msg.chat.id);
     bot!.sendMessage(msg.chat.id,
       `🚀 *iApply Agent Bot*\n\n` +
       `Welcome! To get started, you need to authenticate securely.\n\n` +
-      `[👉 Click Here to Sign In](${authUrl})\n\n` +
       `After signing in, you'll be automatically redirected back here!`,
-      { parse_mode: 'Markdown', disable_web_page_preview: true }
+      {
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true,
+        reply_markup: {
+          inline_keyboard: [[{ text: 'Sign In', url: getTelegramLoginUrl(msg.chat.id) }]],
+        },
+      }
     ).catch(console.error);
   });
 
@@ -75,8 +112,7 @@ export function startTelegramBot(token: string) {
   bot.onText(/\/apply (.+)/, async (msg, match) => {
     const user = await getLinkedUser(msg.chat.id);
     if (!user) {
-      const authUrl = getTelegramLoginUrl(msg.chat.id);
-      bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
+      sendSignInPrompt(msg.chat.id);
       return;
     }
 
@@ -110,8 +146,7 @@ export function startTelegramBot(token: string) {
   bot.onText(/\/stop/, async (msg) => {
     const user = await getLinkedUser(msg.chat.id);
     if (!user) {
-      const authUrl = getTelegramLoginUrl(msg.chat.id);
-      bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
+      sendSignInPrompt(msg.chat.id);
       return;
     }
 
@@ -123,7 +158,7 @@ export function startTelegramBot(token: string) {
   bot.onText(/\/status/, async (msg) => {
     const user = await getLinkedUser(msg.chat.id);
     if (!user) {
-      bot!.sendMessage(msg.chat.id, '🔒 Please link your account first.').catch(console.error);
+      sendSignInPrompt(msg.chat.id, '🔒 Please link your account first.');
       return;
     }
 
@@ -147,22 +182,25 @@ export function startTelegramBot(token: string) {
       return;
     }
 
-    const authUrl = getTelegramLoginUrl(msg.chat.id);
     bot!.sendMessage(
       msg.chat.id,
       `❌ *Not Linked Yet*\n\n` +
       `• Chat ID: \`${msg.chat.id}\`\n\n` +
-      `Please complete sign-in from this link:\n` +
-      `[👉 Click Here to Sign In](${authUrl})`,
-      { parse_mode: 'Markdown', disable_web_page_preview: true }
+      `Please complete sign-in using the button below.`,
+      {
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true,
+        reply_markup: {
+          inline_keyboard: [[{ text: 'Sign In', url: getTelegramLoginUrl(msg.chat.id) }]],
+        },
+      }
     ).catch(console.error);
   });
 
   bot.onText(/\/stats/, async (msg) => {
     const user = await getLinkedUser(msg.chat.id);
     if (!user) {
-      const authUrl = getTelegramLoginUrl(msg.chat.id);
-      bot!.sendMessage(msg.chat.id, `🔒 Please sign in first:\n\n[👉 Click Here to Sign In](${authUrl})`, { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(console.error);
+      sendSignInPrompt(msg.chat.id);
       return;
     }
 
@@ -183,7 +221,7 @@ export function startTelegramBot(token: string) {
   bot.onText(/\/logs/, async (msg) => {
     const user = await getLinkedUser(msg.chat.id);
     if (!user) {
-      bot!.sendMessage(msg.chat.id, '🔒 Please link your account first.').catch(console.error);
+      sendSignInPrompt(msg.chat.id, '🔒 Please link your account first.');
       return;
     }
 
@@ -205,7 +243,7 @@ export function startTelegramBot(token: string) {
   bot.onText(/\/screenshot/, async (msg) => {
     const user = await getLinkedUser(msg.chat.id);
     if (!user) {
-      bot!.sendMessage(msg.chat.id, '🔒 Please link your account first.').catch(console.error);
+      sendSignInPrompt(msg.chat.id, '🔒 Please link your account first.');
       return;
     }
 
@@ -235,11 +273,7 @@ export function startTelegramBot(token: string) {
 
     const user = await getLinkedUser(msg.chat.id);
     if (!user) {
-      const authUrl = getTelegramLoginUrl(msg.chat.id);
-      bot!.sendMessage(msg.chat.id,
-        `🔒 Please sign in first!\n\n[👉 Click Here to Sign In](${authUrl})`,
-        { parse_mode: 'Markdown', disable_web_page_preview: true }
-      ).catch(console.error);
+      sendSignInPrompt(msg.chat.id);
       return;
     }
 
