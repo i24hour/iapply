@@ -156,6 +156,7 @@ export function ChatBot() {
   const { automationStatus, setAutomationStatus, setApplications, resume, profile, preferences } =
     useDashboardStore();
   const [input, setInput] = useState('');
+  const [selectedApplyMode, setSelectedApplyMode] = useState<ApplyMode>('easy');
   const [isProcessing, setIsProcessing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -382,6 +383,9 @@ export function ChatBot() {
 
     const command = parseCommand(messageText);
     if (command) {
+      if (command.action === 'start') {
+        command.applyMode = selectedApplyMode;
+      }
       await handleCommand(command);
     } else {
       addMessage({
@@ -510,6 +514,33 @@ export function ChatBot() {
 
       {/* Input */}
       <div className="border-t px-4 sm:px-6 py-3 sm:py-4 bg-gray-50 rounded-b-xl">
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-xs text-gray-500 font-medium">Mode:</span>
+          <button
+            onClick={() => setSelectedApplyMode('easy')}
+            disabled={isProcessing}
+            className={cn(
+              'text-xs rounded-full px-3 py-1.5 transition border',
+              selectedApplyMode === 'easy'
+                ? 'bg-primary-600 text-white border-primary-600'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            )}
+          >
+            Easy Apply (no resume)
+          </button>
+          <button
+            onClick={() => setSelectedApplyMode('apply')}
+            disabled={isProcessing}
+            className={cn(
+              'text-xs rounded-full px-3 py-1.5 transition border',
+              selectedApplyMode === 'apply'
+                ? 'bg-primary-600 text-white border-primary-600'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            )}
+          >
+            Apply (resume required)
+          </button>
+        </div>
         <div className="flex items-center gap-2 sm:gap-3">
           <input
             ref={inputRef}
