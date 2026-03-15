@@ -41,7 +41,9 @@ router.get('/google', async (req, res) => {
     res.cookie('telegram_auth_id', telegramId, { maxAge: 10 * 60 * 1000, httpOnly: true, secure: true, sameSite: 'none' });
   }
 
-  const redirectTarget = `${getAppUrl(requestHost)}/auth/callback`;
+  const redirectTarget = isTelegramAuth
+    ? `${getAppUrl(requestHost)}/auth/callback`
+    : `${getClientUrl(requestHost)}/auth/success`;
 
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',

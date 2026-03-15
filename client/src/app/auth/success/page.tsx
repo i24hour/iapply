@@ -12,10 +12,15 @@ export default function AuthSuccessPage() {
 
   useEffect(() => {
     const handleAuthSuccess = async () => {
-      // Supabase token can come as access_token (standard) or token (legacy)
+      // Supabase token can come in hash/query as access_token (standard) or token (legacy)
+      const searchParams = new URLSearchParams(window.location.search);
       const hash = window.location.hash;
-      const params = new URLSearchParams(hash.replace('#', ''));
-      const token = params.get('access_token') || params.get('token');
+      const hashParams = new URLSearchParams(hash.replace('#', ''));
+      const token =
+        hashParams.get('access_token') ||
+        searchParams.get('access_token') ||
+        hashParams.get('token') ||
+        searchParams.get('token');
 
       if (!token) {
         router.replace('/login');
