@@ -30,6 +30,17 @@
     "service_worker": "background/service-worker.js",
     "type": "module"
   },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "auth/callback.html",
+        "auth/callback.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
   "content_scripts": [
     {
       "matches": ["https://www.linkedin.com/*"],

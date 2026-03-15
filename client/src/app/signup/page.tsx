@@ -12,6 +12,7 @@ export default function SignupPage() {
   const router = useRouter();
   const { setAuth } = useAuthStore();
   const [telegramId, setTelegramId] = useState<string | null>(null);
+  const [returnTo, setReturnTo] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     fullName: '',
@@ -19,10 +20,20 @@ export default function SignupPage() {
     password: '',
     confirmPassword: '',
   });
+  const loginHref = (() => {
+    const params = new URLSearchParams();
+    if (telegramId) params.set('telegram_id', telegramId);
+    if (returnTo) params.set('return_to', returnTo);
+    const query = params.toString();
+    return query ? `/login?${query}` : '/login';
+  })();
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    setTelegramId(new URLSearchParams(window.location.search).get('telegram_id'));
+    const params = new URLSearchParams(window.location.search);
+    setTelegramId(params.get('telegram_id'));
+    const nextReturnTo = params.get('return_to');
+    setReturnTo(nextReturnTo?.startsWith('chrome-extension://') ? nextReturnTo : null);
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -47,6 +58,12 @@ export default function SignupPage() {
         const linkRes = await authApi.linkTelegram(telegramId);
         toast.success('Telegram verified successfully!');
         router.replace(`/auth/success?from=telegram&bot=${encodeURIComponent(linkRes.data.botUsername)}`);
+      } else if (returnTo) {
+        const hash = new URLSearchParams({
+          access_token: response.data.token,
+          token: response.data.token,
+        });
+        window.location.replace(`${returnTo}#${hash.toString()}`);
       } else {
         toast.success('Account created successfully!');
         router.replace('/dashboard');
@@ -70,7 +87,7 @@ export default function SignupPage() {
           <p className="mt-2 text-gray-600">
             Already have an account?{' '}
             <Link
-              href={telegramId ? `/login?telegram_id=${encodeURIComponent(telegramId)}` : '/login'}
+              href={loginHref}
               className="text-primary-600 hover:text-primary-500"
             >
               Sign in

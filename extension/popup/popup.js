@@ -1,4 +1,11 @@
+const API_URL = 'https://iapply-telegram-bot.onrender.com';
+const WEB_URL = 'https://iapply.onrender.com';
+
 // Elements
+const elAuthStatus = document.getElementById('authStatus');
+const elAuthEmail = document.getElementById('authEmail');
+const elSignInBtn = document.getElementById('signInBtn');
+const elSignOutBtn = document.getElementById('signOutBtn');
 const elProvider = document.getElementById('provider');
 const elApiKey = document.getElementById('apiKey');
 const elModel = document.getElementById('model');
@@ -19,6 +26,65 @@ const elStopPostBtn = document.getElementById('stopPostBtn');
 const elStatusDot = document.getElementById('statusDot');
 const elStatusText = document.getElementById('statusText');
 const elLogFeed = document.getElementById('logFeed');
+
+function getExtensionCallbackUrl() {
+  return chrome.runtime.getURL('auth/callback.html');
+}
+
+function getExtensionLoginUrl() {
+  const params = new URLSearchParams({
+    extension: '1',
+    return_to: getExtensionCallbackUrl(),
+  });
+  return `${WEB_URL}/login?${params.toString()}`;
+}
+
+async function clearExtensionAuth() {
+  await chrome.storage.local.remove(['supabase_token', 'auth_user_email', 'auth_user_id']);
+}
+
+function renderAuthState(isSignedIn, email = '') {
+  elAuthStatus.textContent = isSignedIn ? 'Signed in' : 'Not signed in';
+  elAuthStatus.classList.toggle('connected', isSignedIn);
+  elAuthStatus.classList.toggle('disconnected', !isSignedIn);
+  elAuthEmail.style.display = isSignedIn && email ? 'block' : 'none';
+  elAuthEmail.textContent = email || '';
+  elSignInBtn.style.display = isSignedIn ? 'none' : 'block';
+  elSignOutBtn.style.display = isSignedIn ? 'block' : 'none';
+}
+
+async function loadAuthState() {
+  const { supabase_token: token, auth_user_email: cachedEmail } = await chrome.storage.local.get(['supabase_token', 'auth_user_email']);
+
+  if (!token) {
+    renderAuthState(false);
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/auth/verify`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const email = payload?.data?.email || cachedEmail || '';
+    await chrome.storage.local.set({
+      auth_user_email: email,
+      auth_user_id: payload?.data?.id || '',
+    });
+    renderAuthState(true, email);
+  } catch {
+    await clearExtensionAuth();
+    renderAuthState(false);
+  }
+}
 
 // Load saved settings
 chrome.storage.local.get(['llm_provider', 'llm_api_key', 'llm_model', 'llm_base_url', 'search_query', 'post_title_query', 'post_keywords_query'], (res) => {
@@ -41,6 +107,17 @@ function activateTab(tab) {
 
 elJobTabBtn.addEventListener('click', () => activateTab('job'));
 elPostTabBtn.addEventListener('click', () => activateTab('post'));
+
+elSignInBtn.addEventListener('click', () => {
+  chrome.tabs.create({ url: getExtensionLoginUrl() });
+  addLog('Opened website sign-in. Use the same account as your website and Telegram.');
+});
+
+elSignOutBtn.addEventListener('click', async () => {
+  await clearExtensionAuth();
+  renderAuthState(false);
+  addLog('Extension signed out.');
+});
 
 // Save settings
 elSaveSettingsBtn.addEventListener('click', () => {
@@ -132,6 +209,8 @@ function addLog(message) {
 }
 
 // Check background status on popup open
+loadAuthState();
+
 chrome.runtime.sendMessage({ action: 'get_agent_status' }, (status) => {
   if (status && status.state && status.state !== 'IDLE' && status.state !== 'DONE') {
     elStartAgentBtn.style.display = 'none';

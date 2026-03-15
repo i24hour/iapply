@@ -12,15 +12,26 @@ export default function LoginPage() {
   const router = useRouter();
   const { setAuth } = useAuthStore();
   const [telegramId, setTelegramId] = useState<string | null>(null);
+  const [returnTo, setReturnTo] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
   });
+  const signupHref = (() => {
+    const params = new URLSearchParams();
+    if (telegramId) params.set('telegram_id', telegramId);
+    if (returnTo) params.set('return_to', returnTo);
+    const query = params.toString();
+    return query ? `/signup?${query}` : '/signup';
+  })();
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    setTelegramId(new URLSearchParams(window.location.search).get('telegram_id'));
+    const params = new URLSearchParams(window.location.search);
+    setTelegramId(params.get('telegram_id'));
+    const nextReturnTo = params.get('return_to');
+    setReturnTo(nextReturnTo?.startsWith('chrome-extension://') ? nextReturnTo : null);
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -34,6 +45,12 @@ export default function LoginPage() {
         const linkRes = await authApi.linkTelegram(telegramId);
         toast.success('Telegram verified successfully!');
         router.replace(`/auth/success?from=telegram&bot=${encodeURIComponent(linkRes.data.botUsername)}`);
+      } else if (returnTo) {
+        const hash = new URLSearchParams({
+          access_token: response.data.token,
+          token: response.data.token,
+        });
+        window.location.replace(`${returnTo}#${hash.toString()}`);
       } else {
         toast.success('Welcome back!');
         router.replace('/dashboard');
@@ -57,7 +74,7 @@ export default function LoginPage() {
           <p className="mt-2 text-gray-600">
             Or{' '}
             <Link
-              href={telegramId ? `/signup?telegram_id=${encodeURIComponent(telegramId)}` : '/signup'}
+              href={signupHref}
               className="text-primary-600 hover:text-primary-500"
             >
               create a new account
@@ -71,11 +88,17 @@ export default function LoginPage() {
             type="button"
             onClick={() => {
               const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'https://iapply-telegram-bot.onrender.com';
-              const telegramParam = telegramId ? `?telegram_id=${encodeURIComponent(telegramId)}` : '';
+              const query = new URLSearchParams();
+              if (telegramId) {
+                query.set('telegram_id', telegramId);
+              }
+              if (returnTo) {
+                query.set('return_to', returnTo);
+              }
               if (telegramId && typeof window !== 'undefined') {
                 sessionStorage.setItem('telegram_auth_context', JSON.stringify({ telegramId }));
               }
-              window.location.href = `${baseUrl}/auth/google${telegramParam}`;
+              window.location.href = `${baseUrl}/auth/google${query.toString() ? `?${query.toString()}` : ''}`;
             }}
             className="w-full flex items-center justify-center gap-3 bg-white border border-gray-300 text-gray-700 px-4 py-3 rounded-lg font-semibold hover:bg-gray-50 transition"
           >

@@ -36,6 +36,8 @@ export default function AuthSuccessPage() {
       const telegramContextRaw = sessionStorage.getItem('telegram_auth_context');
       const telegramContext = telegramContextRaw ? JSON.parse(telegramContextRaw) as { telegramId?: string } : null;
       const fromTelegram = searchParams.get('from') === 'telegram' || !!telegramContext?.telegramId;
+      const rawReturnTo = searchParams.get('return_to');
+      const returnTo = rawReturnTo?.startsWith('chrome-extension://') ? rawReturnTo : null;
       const bot = searchParams.get('bot');
       const resolvedBotUsername = (bot || 'infiniteapplybot').replace('@', '');
       if (bot) {
@@ -71,6 +73,18 @@ export default function AuthSuccessPage() {
           },
           token
         );
+        if (returnTo) {
+          const hash = new URLSearchParams({
+            access_token: token,
+            token,
+          });
+          const refreshToken = hashParams.get('refresh_token') || searchParams.get('refresh_token');
+          if (refreshToken) {
+            hash.set('refresh_token', refreshToken);
+          }
+          window.location.replace(`${returnTo}#${hash.toString()}`);
+          return;
+        }
         if (fromTelegram) {
           sessionStorage.removeItem('telegram_auth_context');
           setViewState('telegram-success');

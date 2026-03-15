@@ -28,7 +28,18 @@
     .btn-primary:hover { background: #1d4ed8; }
     .btn-danger { background: #ef4444; color: white; }
     .btn-danger:hover { background: #dc2626; }
+    .btn-secondary { background: #e5e7eb; color: #111827; }
+    .btn-secondary:hover { background: #d1d5db; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-row { display: flex; gap: 8px; }
+    .btn-row .btn { width: auto; flex: 1; }
+
+    .auth-card { border: 1px solid #dbeafe; background: linear-gradient(180deg, #eff6ff, #ffffff); }
+    .auth-status { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 600; }
+    .auth-status.connected { background: #dcfce7; color: #166534; }
+    .auth-status.disconnected { background: #fee2e2; color: #991b1b; }
+    .auth-note { margin-top: 10px; font-size: 12px; line-height: 1.5; color: #4b5563; }
+    .auth-email { margin-top: 8px; font-size: 13px; color: #111827; font-weight: 600; word-break: break-word; }
     
     .status-container { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
     .status-indicator { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500;}
@@ -54,6 +65,18 @@
   </div>
   
   <div class="content">
+    <div class="panel auth-card">
+      <div class="panel-title">Account Connection</div>
+      <div id="authStatus" class="auth-status disconnected">Not signed in</div>
+      <div id="authEmail" class="auth-email" style="display:none;"></div>
+      <div class="auth-note">
+        Sign in with the same account you use on the website and Telegram. That is how the bot finds your extension.
+      </div>
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="btn btn-primary" id="signInBtn">Sign In</button>
+        <button class="btn btn-secondary" id="signOutBtn" style="display:none;">Sign Out</button>
+      </div>
+    </div>
     
     <!-- Settings Panel -->
     <div class="panel">

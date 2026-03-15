@@ -36,6 +36,34 @@ function getBotUsername() {
   return (process.env.TELEGRAM_BOT_USERNAME || 'infiniteapplybot').replace('@', '');
 }
 
+function sanitizeReturnTo(value?: string) {
+  if (!value) return null;
+
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'chrome-extension:') {
+      return url.toString();
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function buildTokenRedirect(target: string, accessToken: string, refreshToken?: string) {
+  const hash = new URLSearchParams({
+    access_token: accessToken,
+    token: accessToken,
+  });
+
+  if (refreshToken) {
+    hash.set('refresh_token', refreshToken);
+  }
+
+  return `${target}#${hash.toString()}`;
+}
+
 function getTelegramReturnLinks() {
   const botUsername = getBotUsername();
   return {
@@ -49,14 +77,23 @@ function getTelegramReturnLinks() {
 router.get('/google', async (req, res) => {
   const requestHost = (req.headers['x-forwarded-host'] as string) || req.get('host') || '';
   const telegramId = req.query.telegram_id as string;
+  const returnTo = sanitizeReturnTo(req.query.return_to as string | undefined);
   const isTelegramAuth = !!telegramId;
-  console.log('[auth/google]', { requestHost, telegramId, isTelegramAuth });
+  console.log('[auth/google]', { requestHost, telegramId, isTelegramAuth, returnTo });
   if (telegramId) {
     res.cookie('telegram_auth_id', telegramId, { maxAge: 10 * 60 * 1000, httpOnly: true, secure: true, sameSite: 'none' });
   }
 
-  const redirectTarget = isTelegramAuth
-    ? `${getAppUrl(requestHost)}/auth/callback?telegram_id=${encodeURIComponent(telegramId)}`
+  const callbackUrl = new URL(`${getAppUrl(requestHost)}/auth/callback`);
+  if (telegramId) {
+    callbackUrl.searchParams.set('telegram_id', telegramId);
+  }
+  if (returnTo) {
+    callbackUrl.searchParams.set('return_to', returnTo);
+  }
+
+  const redirectTarget = isTelegramAuth || returnTo
+    ? callbackUrl.toString()
     : `${getClientUrl(requestHost)}/auth/success`;
 
   const { data, error } = await supabase.auth.signInWithOAuth({
@@ -81,24 +118,30 @@ router.get('/callback', async (req, res) => {
   const oauthError = req.query.error as string | undefined;
   const oauthErrorDescription = req.query.error_description as string | undefined;
   const telegramId = (req.query.telegram_id as string | undefined) || req.cookies.telegram_auth_id;
+  const returnTo = sanitizeReturnTo(req.query.return_to as string | undefined);
   console.log('[auth/callback]', {
     requestHost,
     telegramIdFromQuery: req.query.telegram_id,
     telegramIdFromCookie: req.cookies.telegram_auth_id,
     resolvedTelegramId: telegramId,
+    returnTo,
     hasCode: !!code,
     oauthError,
   });
 
   if (!code) {
     const loginUrl = `${getClientUrl(requestHost)}/login`;
-    const telegramParam = telegramId ? `&telegram_id=${encodeURIComponent(telegramId)}` : '';
+    const fallbackParams = new URLSearchParams();
+    if (telegramId) fallbackParams.set('telegram_id', telegramId);
+    if (returnTo) fallbackParams.set('return_to', returnTo);
     if (oauthError) {
       const query = new URLSearchParams({ oauth: 'failed', reason: oauthError });
       if (oauthErrorDescription) query.set('message', oauthErrorDescription);
-      return res.redirect(`${loginUrl}?${query.toString()}${telegramParam}`);
+      fallbackParams.forEach((value, key) => query.set(key, value));
+      return res.redirect(`${loginUrl}?${query.toString()}`);
     }
-    return res.redirect(`${loginUrl}?oauth=retry${telegramParam}`);
+    fallbackParams.set('oauth', 'retry');
+    return res.redirect(`${loginUrl}?${fallbackParams.toString()}`);
   }
 
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
@@ -138,6 +181,10 @@ router.get('/callback', async (req, res) => {
       `${getClientUrl(requestHost)}/auth/success?from=telegram&bot=${encodeURIComponent(botUsername)}` +
       `#access_token=${session.access_token}&refresh_token=${session.refresh_token}&token=${session.access_token}`;
     return res.redirect(redirectUrl);
+  }
+
+  if (returnTo) {
+    return res.redirect(buildTokenRedirect(returnTo, session.access_token, session.refresh_token));
   }
 
   // Redirect to frontend auth success page with session tokens in the URL hash
