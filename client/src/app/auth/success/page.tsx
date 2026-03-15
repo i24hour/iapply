@@ -21,6 +21,13 @@ export default function AuthSuccessPage() {
     webBotLink: `https://t.me/${safeBot}?start=success`,
   };
 
+  const handleReturnToBot = () => {
+    window.location.href = botLinks.tgDeepLink;
+    window.setTimeout(() => {
+      window.location.href = botLinks.webBotLink;
+    }, 900);
+  };
+
   useEffect(() => {
     const handleAuthSuccess = async () => {
       const searchParams = new URLSearchParams(window.location.search);
@@ -64,14 +71,6 @@ export default function AuthSuccessPage() {
         );
         if (fromTelegram) {
           setViewState('telegram-success');
-          const openBot = () => {
-            window.location.href = `tg://resolve?domain=${resolvedBotUsername}&start=success`;
-            window.setTimeout(() => {
-              window.location.href = `https://t.me/${resolvedBotUsername}?start=success`;
-            }, 900);
-          };
-
-          window.setTimeout(openBot, 300);
           return;
         }
 
@@ -101,17 +100,18 @@ export default function AuthSuccessPage() {
             </div>
             <h1 className="text-2xl font-bold text-gray-900">Verification complete</h1>
             <p className="mt-3 text-sm leading-6 text-gray-600 sm:text-base">
-              Your account is now linked with Telegram. We&apos;re sending you back to the bot now.
+              Your account is now linked with Telegram. Tap the button below to go back to the bot.
             </p>
 
             <div className="mt-6 space-y-3">
-              <a
-                href={botLinks.webBotLink}
+              <button
+                type="button"
+                onClick={handleReturnToBot}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary-600 px-5 py-3 font-semibold text-white transition hover:bg-primary-700"
               >
                 Go back to Bot
                 <ArrowRight className="h-4 w-4" />
-              </a>
+              </button>
               <Link
                 href="/dashboard"
                 className="inline-flex w-full items-center justify-center rounded-xl border border-gray-200 px-5 py-3 font-medium text-gray-700 transition hover:bg-gray-50"
@@ -121,7 +121,7 @@ export default function AuthSuccessPage() {
             </div>
 
             <p className="mt-4 text-xs text-gray-500">
-              If Telegram does not open automatically, tap &quot;Go back to Bot&quot;.
+              The button first tries the Telegram app, then falls back to the bot link.
             </p>
           </div>
         </div>
