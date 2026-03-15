@@ -106,7 +106,59 @@ router.get('/callback', async (req, res) => {
 
   if (telegramId) {
     res.clearCookie('telegram_auth_id');
-    return res.redirect('https://t.me/infiniteapplybot?start=success');
+    const botUsername = (process.env.TELEGRAM_BOT_USERNAME || 'infiniteapplybot').replace('@', '');
+    const tgDeepLink = `tg://resolve?domain=${botUsername}&start=success`;
+    const webBotLink = `https://t.me/${botUsername}?start=success`;
+
+    return res
+      .status(200)
+      .send(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Authentication Successful</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fb; margin: 0; }
+      .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+      .card { max-width: 520px; width: 100%; background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 28px; text-align: center; box-shadow: 0 8px 30px rgba(0,0,0,.05); }
+      h1 { margin: 0 0 12px; color: #111827; font-size: 28px; }
+      p { margin: 0 0 20px; color: #4b5563; line-height: 1.5; }
+      .btn { display: inline-block; padding: 12px 18px; border-radius: 10px; background: #2563eb; color: #fff; text-decoration: none; font-weight: 600; }
+      .sub { margin-top: 12px; font-size: 13px; color: #6b7280; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>✅ Verified Successfully</h1>
+        <p>Your account is linked. Tap below to continue in Telegram bot.</p>
+        <a class="btn" id="openBot" href="${webBotLink}">Go back to bot</a>
+        <div class="sub">If Telegram does not open automatically, tap the button again.</div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var opened = false;
+        function openDeepLink() {
+          if (opened) return;
+          opened = true;
+          window.location.href = '${tgDeepLink}';
+          setTimeout(function () {
+            window.location.href = '${webBotLink}';
+          }, 900);
+        }
+        setTimeout(openDeepLink, 200);
+        var btn = document.getElementById('openBot');
+        if (btn) {
+          btn.addEventListener('click', function () {
+            opened = true;
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>`);
   }
 
   // Redirect to frontend auth success page with session tokens in the URL hash
