@@ -40,7 +40,36 @@ function getExtensionLoginUrl() {
 }
 
 async function clearExtensionAuth() {
-  await chrome.storage.local.remove(['supabase_token', 'auth_user_email', 'auth_user_id']);
+  await chrome.storage.local.remove(['supabase_token', 'supabase_refresh_token', 'auth_user_email', 'auth_user_id']);
+}
+
+// Try to silently get a new access_token using the stored refresh_token.
+// Returns the new email on success, null on failure.
+async function tryRefreshToken() {
+  const { supabase_refresh_token: refreshToken } = await chrome.storage.local.get(['supabase_refresh_token']);
+  if (!refreshToken) return null;
+
+  try {
+    const res = await fetch(`${API_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.data?.access_token) return null;
+
+    await chrome.storage.local.set({
+      supabase_token: data.data.access_token,
+      supabase_refresh_token: data.data.refresh_token || refreshToken,
+      auth_user_email: data.data.email || '',
+      auth_user_id: data.data.id || '',
+    });
+    chrome.runtime.sendMessage({ action: 'set_token', token: data.data.access_token }).catch(() => {});
+    return data.data.email || '';
+  } catch {
+    return null;
+  }
 }
 
 function renderAuthState(isSignedIn, email = '') {
@@ -79,6 +108,12 @@ async function loadAuthState() {
 
     // Only sign out if the server explicitly rejects the token.
     if (response.status === 401 || response.status === 403) {
+      // Try a silent token refresh before giving up.
+      const newEmail = await tryRefreshToken();
+      if (newEmail !== null) {
+        renderAuthState(true, newEmail || cachedEmail);
+        return;
+      }
       await clearExtensionAuth();
       renderAuthState(false);
       return;

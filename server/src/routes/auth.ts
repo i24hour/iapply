@@ -68,8 +68,8 @@ function getTelegramReturnLinks() {
   const botUsername = getBotUsername();
   return {
     botUsername,
-    tgDeepLink: `tg://resolve?domain=${botUsername}&start=success`,
-    webBotLink: `https://t.me/${botUsername}?start=success`,
+    tgDeepLink: `tg://resolve?domain=${botUsername}&start=linked`,
+    webBotLink: `https://t.me/${botUsername}?start=linked`,
   };
 }
 
@@ -176,11 +176,8 @@ router.get('/callback', async (req, res) => {
     if (req.cookies.telegram_auth_id) {
       res.clearCookie('telegram_auth_id');
     }
-    const { botUsername } = getTelegramReturnLinks();
-    const redirectUrl =
-      `${getClientUrl(requestHost)}/auth/success?from=telegram&bot=${encodeURIComponent(botUsername)}` +
-      `#access_token=${session.access_token}&refresh_token=${session.refresh_token}&token=${session.access_token}`;
-    return res.redirect(redirectUrl);
+    const { tgDeepLink } = getTelegramReturnLinks();
+    return res.redirect(tgDeepLink);
   }
 
   if (returnTo) {
@@ -235,6 +232,29 @@ router.post('/link-telegram', authenticate, async (req: AuthRequest, res) => {
     console.error('Failed to link telegram user:', error);
     res.status(500).json({ success: false, error: 'Failed to link Telegram account' });
   }
+});
+
+// ─── POST /auth/refresh — exchange a refresh_token for new tokens (used by extension) ──
+router.post('/refresh', async (req, res) => {
+  const refreshToken = req.body?.refresh_token as string | undefined;
+  if (!refreshToken) {
+    return res.status(400).json({ success: false, error: 'No refresh_token' });
+  }
+
+  const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
+  if (error || !data?.session) {
+    return res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
+  }
+
+  res.json({
+    success: true,
+    data: {
+      access_token: data.session.access_token,
+      refresh_token: data.session.refresh_token,
+      id: data.user?.id,
+      email: data.user?.email,
+    },
+  });
 });
 
 // ─── POST /auth/verify — verify a token (used by extension) ──────────────────

@@ -29,23 +29,19 @@ function isLocalUrl(url?: string) {
   return !!url && (url.includes('localhost') || url.includes('127.0.0.1'));
 }
 
-function getPublicClientUrl() {
-  const telegramClientUrl = process.env.TELEGRAM_CLIENT_URL?.trim();
-  if (telegramClientUrl) {
-    return telegramClientUrl;
+function getAppUrl() {
+  const configured = process.env.APP_URL?.trim();
+  if (configured && !isLocalUrl(configured)) {
+    return configured;
   }
-
-  const clientUrl = process.env.CLIENT_URL?.trim();
-  if (clientUrl && !isLocalUrl(clientUrl)) {
-    return clientUrl;
-  }
-
-  return 'https://iapply.onrender.com';
+  return process.env.NODE_ENV === 'production'
+    ? 'https://iapply-telegram-bot.onrender.com'
+    : 'http://localhost:3001';
 }
 
 function getTelegramLoginUrl(chatId: number) {
-  const clientUrl = getPublicClientUrl();
-  return `${clientUrl}/login?telegram_id=${chatId}`;
+  const appUrl = getAppUrl();
+  return `${appUrl}/auth/google?telegram_id=${chatId}`;
 }
 
 function sendSignInPrompt(chatId: number, text = '🔒 Please sign in first!') {
@@ -291,7 +287,7 @@ export function startTelegramBot(token: string) {
   bot.onText(/\/start(.*)/, async (msg, match) => {
     const param = match![1].trim();
 
-    if (param === 'success') {
+    if (param === 'linked') {
       const user = await getLinkedUser(msg.chat.id);
       if (!user) {
         sendSignInPrompt(msg.chat.id, '⚠️ Sign-in completed but account linking is still pending.');

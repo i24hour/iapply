@@ -8,7 +8,7 @@ function setStatus(message, variant = '') {
   statusEl.className = `status${variant ? ` ${variant}` : ''}`;
 }
 
-async function verifyAndStoreToken(token) {
+async function verifyAndStoreToken(token, refreshToken) {
   const response = await fetch(`${API_URL}/auth/verify`, {
     method: 'POST',
     headers: {
@@ -23,6 +23,7 @@ async function verifyAndStoreToken(token) {
   const payload = await response.json();
   await chrome.storage.local.set({
     supabase_token: token,
+    supabase_refresh_token: refreshToken || '',
     auth_user_email: payload?.data?.email || '',
     auth_user_id: payload?.data?.id || '',
   });
@@ -33,6 +34,7 @@ async function verifyAndStoreToken(token) {
 async function completeExtensionAuth() {
   const hashParams = new URLSearchParams(window.location.hash.slice(1));
   const token = hashParams.get('access_token') || hashParams.get('token');
+  const refreshToken = hashParams.get('refresh_token') || '';
 
   if (!token) {
     setStatus('No token found. Please sign in again from the extension.', 'error');
@@ -41,7 +43,7 @@ async function completeExtensionAuth() {
 
   try {
     setStatus('Verifying account...');
-    await verifyAndStoreToken(token);
+    await verifyAndStoreToken(token, refreshToken);
     setStatus('Extension connected successfully. You can now use the same account with the website, Telegram, and the extension.', 'success');
   } catch (error) {
     console.error('Extension auth callback failed:', error);

@@ -23,8 +23,8 @@ export default function AuthSuccessPage() {
   const [botUsername, setBotUsername] = useState('infiniteapplybot');
   const safeBot = botUsername.replace('@', '');
   const botLinks = {
-    tgDeepLink: `tg://resolve?domain=${safeBot}&start=success`,
-    webBotLink: `https://t.me/${safeBot}?start=success`,
+    tgDeepLink: `tg://resolve?domain=${safeBot}&start=linked`,
+    webBotLink: `https://t.me/${safeBot}?start=linked`,
   };
 
   const handleReturnToBot = () => {
