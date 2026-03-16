@@ -601,6 +601,15 @@ function getFieldLabel(el) {
   const ariaLabel = el.getAttribute('aria-label');
   if (ariaLabel) return ariaLabel.trim();
 
+  // Special handling for LinkedIn resume cards where the filename is in an h3
+  const resumeCard = el.closest('.jobs-document-upload-redesign-card, .ui-attachment');
+  if (resumeCard) {
+    const fileNameElement = resumeCard.querySelector('h3, .ui-attachment__title, .jobs-document-upload-redesign-card__file-name, [data-test-text-selectable-option__text]');
+    if (fileNameElement && fileNameElement.textContent) {
+       return fileNameElement.textContent.trim();
+    }
+  }
+
   const fieldContainer = el.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping, .artdeco-text-input--container');
   if (fieldContainer) {
     const label = fieldContainer.querySelector('label, legend, .fb-dash-form-element__label, .t-14');
@@ -619,6 +628,30 @@ function getInlineErrorText(el) {
 
   const errorEl = fieldContainer.querySelector('.artdeco-inline-feedback__message, .artdeco-inline-feedback--error, .fb-dash-form-element__error-message, [role="alert"]');
   return errorEl?.textContent?.trim() || '';
+}
+
+function isElementChecked(el) {
+  if (el.checked !== undefined) return el.checked;
+  if (el.getAttribute('aria-checked') === 'true') return true;
+  if (el.getAttribute('aria-selected') === 'true') return true;
+  
+  if (el.tagName === 'LABEL') {
+    const inputInside = el.querySelector('input[type="radio"], input[type="checkbox"]');
+    if (inputInside && inputInside.checked !== undefined) return inputInside.checked;
+    
+    if (el.htmlFor) {
+      const inputFor = document.getElementById(el.htmlFor);
+      if (inputFor && inputFor.checked !== undefined) return inputFor.checked;
+    }
+  }
+  
+  const resumeCard = el.closest('.jobs-document-upload-redesign-card, .ui-attachment');
+  if (resumeCard) {
+     const inputInside = resumeCard.querySelector('input[type="radio"], input[type="checkbox"]');
+     if (inputInside && inputInside.checked) return true;
+  }
+
+  return undefined;
 }
 
 function isNumericInput(el) {
@@ -870,7 +903,7 @@ function buildDOMSnapshot() {
   const interactiveSelectors = [
     'button', 'a[href]', 'input', 'select', 'textarea',
     '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
-    '[role="menuitem"]', '[role="tab"]'
+    '[role="menuitem"]', '[role="tab"]', 'label', '.ui-attachment', '.jobs-document-upload-redesign-card'
   ].join(', ');
 
   const elements = Array.from(document.querySelectorAll(interactiveSelectors));
@@ -900,7 +933,7 @@ function buildDOMSnapshot() {
       required: el.required || el.getAttribute('aria-required') === 'true' || undefined,
       invalid: el.getAttribute('aria-invalid') === 'true' || undefined,
       errorText: getInlineErrorText(el) || undefined,
-      checked: el.checked !== undefined ? el.checked : undefined,
+      checked: isElementChecked(el),
       center: {
         x: Math.round(rect.left + rect.width / 2),
         y: Math.round(rect.top + rect.height / 2)
