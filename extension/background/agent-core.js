@@ -413,8 +413,17 @@ RULES:
 18. HARD RULE: If you selected the same dropdown value 2+ times and the field now has a non-empty value without invalid=true, STOP selecting it again and click the step button (Next/Review/Continue/Submit).
 19. HARD RULE: If the page appears unchanged after your previous action, you MUST switch strategy (different element, click progress button, or scroll). Never repeat the same action 3 times.
 ${resumeKeyword
-  ? `20. RESUME SELECTION: When LinkedIn shows a resume list, find the file whose name contains "${resumeKeyword}" and click it. Do NOT pick by "most recently used" — pick by keyword match. If no file contains "${resumeKeyword}", choose the one whose name best matches the job title keywords [${titleTokens.join(', ')}].`
-  : `20. RESUME SELECTION: When LinkedIn shows a resume list, choose the file whose name best matches the job title. Keywords to look for: [${titleTokens.join(', ')}]. Do NOT default to the most-recently-used resume — always pick by relevance.`
+  ? `20. RESUME SELECTION (CRITICAL — follow these steps IN ORDER):
+    a) FIRST: If you see a "Show N more resumes", "Show more", or any expand/toggle button in the resume section, you MUST click it IMMEDIATELY. Do NOT select any resume until ALL resumes are visible.
+    b) AFTER all resumes are expanded and visible: Find the resume whose filename contains the keyword "${resumeKeyword}" and click its radio button to select it.
+    c) If multiple resumes contain "${resumeKeyword}", prefer the one with more keyword overlap with [${titleTokens.join(', ')}].
+    d) Only AFTER selecting the correct resume, click "Next" / "Review" / "Continue".
+    e) NEVER pick the "most recently used" or first resume by default — ALWAYS expand and pick by keyword match.`
+  : `20. RESUME SELECTION (CRITICAL — follow these steps IN ORDER):
+    a) FIRST: If you see a "Show N more resumes", "Show more", or any expand/toggle button in the resume section, you MUST click it IMMEDIATELY. Do NOT select any resume until ALL resumes are visible.
+    b) AFTER all resumes are expanded and visible: Choose the resume whose filename best matches the job title. Keywords to look for: [${titleTokens.join(', ')}].
+    c) Only AFTER selecting the correct resume, click "Next" / "Review" / "Continue".
+    d) NEVER default to the most-recently-used resume — always expand all and pick by relevance.`
 }
 ${stuckHint}
 
