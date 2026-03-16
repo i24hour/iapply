@@ -196,9 +196,8 @@ Return strict JSON only with this shape:
 {"intent":"apply|screenshot|stop|status|usage|logs|help|stats|whoami|chat","query":"string","userGoal":"string","reply":"string"}
 
 Rules:
-- If the user asks to apply, extract a clean job query in "query".
-- If the user asks to apply, put the full instruction in "userGoal".
-- Remove resume-specific trailing phrases like "with my product resume"; the job query should stay role-focused.
+- If the user asks to apply, extract a clean job-role-only string in "query" (e.g. "product manager"), stripping filler words and resume preferences.
+- If the user asks to apply, put the COMPLETE original instruction verbatim in "userGoal" — do NOT strip resume preferences or any other details from it.
 - If intent is not "chat", keep "reply" empty.
 - If intent is "chat", give a short helpful plain-text reply in "reply".
 - Never wrap JSON in markdown fences.

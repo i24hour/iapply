@@ -364,13 +364,24 @@ function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
 // ---- LLM Provider Abstraction ----
 
 async function callLLM(snapshot, stuckHint = '') {
-  const resumeLine = settings.selectedResume
-    ? `\nSELECTED RESUME: "${settings.selectedResume.file_name}" (this is the best-matched resume for this job role)`
+  // Extract an explicit resume preference from the user's goal (e.g. "with my product resume" → "product").
+  const goalText = (settings.userGoal || settings.searchQuery || '').toLowerCase();
+  const resumeHintMatch = goalText.match(/\b(\w+)\s+resume\b/i);
+  const resumeKeyword = resumeHintMatch?.[1]?.toLowerCase() || null;
+
+  // Job-title tokens for fallback resume matching.
+  const titleTokens = (settings.searchQuery || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length > 2);
+
+  const resumeContextLine = resumeKeyword
+    ? `\nRESUME PREFERENCE: The user wants to use their "${resumeKeyword}" resume — when LinkedIn shows a resume list, pick the file whose name contains "${resumeKeyword}".`
     : '';
 
   const prompt = `You are an autonomous browser agent. You control a Chrome browser on LinkedIn.
 
-YOUR GOAL: ${currentGoal}${resumeLine}
+YOUR GOAL: ${currentGoal}${resumeContextLine}
 
 CURRENT PAGE:
 - URL: ${snapshot.url}
@@ -401,7 +412,10 @@ RULES:
 17. If a field label or error mentions decimal, numeric, number, salary, CTC, notice period, or experience, enter digits only. Example: use "1" instead of "1 month".
 18. HARD RULE: If you selected the same dropdown value 2+ times and the field now has a non-empty value without invalid=true, STOP selecting it again and click the step button (Next/Review/Continue/Submit).
 19. HARD RULE: If the page appears unchanged after your previous action, you MUST switch strategy (different element, click progress button, or scroll). Never repeat the same action 3 times.
-${settings.selectedResume ? `20. RESUME SELECTION: If the Easy Apply modal shows a list of resumes to choose from, select the one named "${settings.selectedResume.file_name}". If that exact name is not listed, choose the closest match. If no resume list is shown, proceed normally.` : ''}
+${resumeKeyword
+  ? `20. RESUME SELECTION: When LinkedIn shows a resume list, find the file whose name contains "${resumeKeyword}" and click it. Do NOT pick by "most recently used" — pick by keyword match. If no file contains "${resumeKeyword}", choose the one whose name best matches the job title keywords [${titleTokens.join(', ')}].`
+  : `20. RESUME SELECTION: When LinkedIn shows a resume list, choose the file whose name best matches the job title. Keywords to look for: [${titleTokens.join(', ')}]. Do NOT default to the most-recently-used resume — always pick by relevance.`
+}
 ${stuckHint}
 
 AVAILABLE ACTIONS:
