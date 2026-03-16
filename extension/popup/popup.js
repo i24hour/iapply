@@ -61,16 +61,32 @@ async function loadAuthState() {
     return;
   }
 
+  // If we already have a cached email, immediately show as signed in while we verify.
+  if (cachedEmail) {
+    renderAuthState(true, cachedEmail);
+  }
+
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
     const response = await fetch(`${API_URL}/auth/verify`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
+
+    // Only sign out if the server explicitly rejects the token.
+    if (response.status === 401 || response.status === 403) {
+      await clearExtensionAuth();
+      renderAuthState(false);
+      return;
+    }
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      // Server error or cold-start — trust the cached token and keep the user signed in.
+      return;
     }
 
     const payload = await response.json();
@@ -81,8 +97,8 @@ async function loadAuthState() {
     });
     renderAuthState(true, email);
   } catch {
-    await clearExtensionAuth();
-    renderAuthState(false);
+    // Network error or timeout — keep the user signed in with the cached state.
+    // Don't clear the token; it may still be valid once the backend is reachable.
   }
 }
 
