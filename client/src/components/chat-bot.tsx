@@ -165,7 +165,7 @@ export function ChatBot() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleCommand = async (command: ParsedCommand) => {
+  const handleCommand = async (command: ParsedCommand, rawCommandText: string) => {
     setIsProcessing(true);
 
     try {
@@ -193,7 +193,11 @@ export function ChatBot() {
           }
 
           const count = command.count || 10;
-          await automationApi.start(count);
+          await automationApi.start(count, {
+            source: 'frontend',
+            channel: 'dashboard_chat',
+            commandText: rawCommandText,
+          });
           setAutomationStatus({ ...automationStatus, isRunning: true, currentAction: 'scrape_jobs' });
 
           if (applyMode === 'easy') {
@@ -386,7 +390,7 @@ export function ChatBot() {
       if (command.action === 'start') {
         command.applyMode = selectedApplyMode;
       }
-      await handleCommand(command);
+      await handleCommand(command, messageText);
     } else {
       addMessage({
         role: 'bot',

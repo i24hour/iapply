@@ -2,6 +2,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { pushCommand, onAgentLog, getAgentStatus, getRecentLogs } from './agent-commands.js';
 import { getUserById, getUserByTelegramId, countLinkedTelegramUsers } from './supabase.js';
+import { createTaskRun, recordUsageEvent, stopOpenTasksForUser } from './usage-tracking.js';
 
 let bot: TelegramBot | null = null;
 
@@ -128,13 +129,25 @@ export function startTelegramBot(token: string) {
       return;
     }
 
+    const taskRun = user.email
+      ? await createTaskRun({
+          userId: user.id,
+          userEmail: user.email,
+          source: 'telegram',
+          channel: 'telegram_bot',
+          commandText: `/apply ${query}`,
+          metadata: { telegram_chat_id: msg.chat.id },
+        })
+      : null;
+
     const cmd = pushCommand({
       userId: user.id,
       type: 'start_agent',
       payload: {
         searchQuery: query,
         provider: 'gemini',
-        apiKey: process.env.GEMINI_API_KEY || ''
+        apiKey: process.env.GEMINI_API_KEY || '',
+        taskId: taskRun?.id || undefined,
       },
     });
 
@@ -157,6 +170,7 @@ export function startTelegramBot(token: string) {
     }
 
     pushCommand({ userId: user.id, type: 'stop_agent', payload: {} });
+    await stopOpenTasksForUser(user.id);
     bot!.sendMessage(msg.chat.id, '⏹ *Agent Stop command sent.*\nThe extension will stop after the current step.', { parse_mode: 'Markdown' }).catch(console.error);
   });
 
@@ -321,6 +335,26 @@ Respond conversationally to the user about what the agent is currently doing or 
 
       const data = await response.json() as any;
       const aiResponse = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      const usage = data?.usageMetadata;
+
+      if (user.email && usage) {
+        await recordUsageEvent({
+          userId: user.id,
+          userEmail: user.email,
+          taskId: null,
+          source: 'telegram',
+          channel: 'telegram_bot',
+          provider: 'gemini',
+          model: 'gemini-2.0-flash-lite',
+          inputTokens: Number(usage.promptTokenCount || 0),
+          outputTokens: Number(usage.candidatesTokenCount || 0),
+          totalTokens: Number(usage.totalTokenCount || 0),
+          metadata: {
+            kind: 'telegram_assistant_reply',
+            prompt_preview: msg.text.slice(0, 120),
+          },
+        });
+      }
 
       if (aiResponse) {
         bot!.sendMessage(msg.chat.id, aiResponse, { parse_mode: 'Markdown' }).catch(console.error);

@@ -3,11 +3,15 @@ import { z } from 'zod';
 import { createError } from '../middleware/error-handler.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
+import { createTaskRun, stopOpenTasksForUser } from '../lib/usage-tracking.js';
 
 const router = Router();
 
 const startAutomationSchema = z.object({
   count: z.number().min(1).max(100).default(10),
+  source: z.enum(['frontend', 'extension', 'telegram']).optional().default('frontend'),
+  channel: z.string().min(1).max(100).optional().default('dashboard_chat'),
+  commandText: z.string().min(1).max(500).optional(),
 });
 
 // Get automation status
@@ -45,7 +49,7 @@ router.get('/status', authenticate, async (req: AuthRequest, res: Response, next
 // Start automation
 router.post('/start', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { count } = startAutomationSchema.parse(req.body);
+    const { count, source, channel, commandText } = startAutomationSchema.parse(req.body);
 
     const { data: activeCommand } = await supabase
       .from('agent_sessions')
@@ -79,6 +83,22 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
       throw createError('Failed to start automation', 500);
     }
 
+    if (req.user?.email) {
+      await createTaskRun({
+        userId: req.userId!,
+        userEmail: req.user.email,
+        source,
+        channel,
+        commandText: commandText || `apply ${count} jobs`,
+        agentSessionId: command?.id || null,
+        metadata: {
+          count,
+          roles: preferences?.roles || [],
+          locations: preferences?.locations || [],
+        },
+      });
+    }
+
     res.json({
       success: true,
       data: {
@@ -106,6 +126,8 @@ router.post('/pause', authenticate, async (req: AuthRequest, res: Response, next
       .eq('user_id', req.userId)
       .in('status', ['idle', 'running']);
 
+    await stopOpenTasksForUser(req.userId!);
+
     res.json({ success: true, message: 'Automation paused' });
   } catch (error) {
     next(error);
@@ -120,6 +142,8 @@ router.post('/stop', authenticate, async (req: AuthRequest, res: Response, next:
       .update({ status: 'stopped' })
       .eq('user_id', req.userId)
       .in('status', ['idle', 'running']);
+
+    await stopOpenTasksForUser(req.userId!);
 
     res.json({ success: true, message: 'Automation stopped' });
   } catch (error) {

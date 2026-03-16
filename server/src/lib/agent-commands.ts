@@ -10,6 +10,7 @@ export interface AgentCommand {
     provider?: string;
     model?: string;
     apiKey?: string;
+    taskId?: string;
   };
   status: 'pending' | 'in_progress' | 'completed';
   createdAt: Date;

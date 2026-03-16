@@ -82,7 +82,14 @@ export const preferencesApi = {
 };
 
 export const automationApi = {
-  start: (count: number) => api.post('/automation/start', { count }),
+  start: (
+    count: number,
+    options?: {
+      source?: 'frontend' | 'extension' | 'telegram';
+      channel?: string;
+      commandText?: string;
+    }
+  ) => api.post('/automation/start', { count, ...options }),
   pause: () => api.post('/automation/pause'),
   stop: () => api.post('/automation/stop'),
   status: () => api.get('/automation/status'),

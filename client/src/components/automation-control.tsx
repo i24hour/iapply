@@ -20,7 +20,11 @@ export function AutomationControl() {
 
     setIsLoading(true);
     try {
-      const res = await automationApi.start(jobCount);
+      await automationApi.start(jobCount, {
+        source: 'frontend',
+        channel: 'dashboard_control',
+        commandText: `apply ${jobCount} jobs`,
+      });
       setAutomationStatus({ ...automationStatus, isRunning: true, currentAction: 'scrape_jobs' });
       toast.success(`Started applying to ${jobCount} jobs`);
     } catch (error: any) {

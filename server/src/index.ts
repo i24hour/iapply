@@ -21,6 +21,7 @@ import automationRouter from './routes/automation.js';
 import applicationsRouter from './routes/applications.js';
 import extensionRouter from './routes/extension.js';
 import telegramBridgeRouter from './routes/telegram-bridge.js';
+import usageRouter from './routes/usage.js';
 import { startTelegramBot } from './lib/telegram.js';
 
 const app = express();
@@ -39,6 +40,7 @@ app.use('/automation', automationRouter);
 app.use('/applications', applicationsRouter);
 app.use('/extension', extensionRouter);
 app.use('/agent', telegramBridgeRouter);
+app.use('/usage', usageRouter);
 
 app.get('/', (_req, res) => {
   res.json({ status: 'ok', message: '🤖 iApply Telegram Bot is running!', uptime: process.uptime() });

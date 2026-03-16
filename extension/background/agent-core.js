@@ -8,11 +8,16 @@ let settings = {};
 let stepCount = 0;
 let lastActions = []; // Track last N actions for stuck detection
 let recentPageSignatures = [];
+let currentTaskId = null;
+let currentTaskSource = 'extension';
+let currentTaskChannel = 'extension_popup';
+let currentAgentSessionId = null;
 const MAX_STEPS = 50;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
 const STAGNATION_WINDOW = 4;
 
 // Constants
+const API_URL = 'https://iapply-telegram-bot.onrender.com';
 const ANTHROPIC_DEFAULT_URL = 'https://api.anthropic.com';
 const OPENAI_DEFAULT_URL = 'https://api.openai.com';
 
@@ -21,14 +26,73 @@ function broadcastLog(message, isError = false) {
   chrome.runtime.sendMessage({ action: 'agent_log', message, isError }).catch(() => {});
 }
 
+async function getAuthHeaders() {
+  const result = await chrome.storage.local.get(['supabase_token']);
+  const token = result.supabase_token;
+  if (!token) return null;
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+}
+
+async function updateTaskStatus(status) {
+  if (!currentTaskId) return;
+  const headers = await getAuthHeaders();
+  if (!headers) return;
+
+  fetch(`${API_URL}/usage/tasks/${currentTaskId}/status`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ status }),
+  }).catch(() => {});
+}
+
+async function completeAutomationSession() {
+  if (!currentAgentSessionId) return;
+  const headers = await getAuthHeaders();
+  if (!headers) return;
+
+  fetch(`${API_URL}/extension/commands/${currentAgentSessionId}/complete`, {
+    method: 'POST',
+    headers,
+  }).catch(() => {});
+}
+
+async function recordUsageToBackend({ provider, model, inputTokens, outputTokens, totalTokens, metadata = {} }) {
+  const headers = await getAuthHeaders();
+  if (!headers) return;
+
+  fetch(`${API_URL}/usage/llm`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      taskId: currentTaskId,
+      source: currentTaskSource,
+      channel: currentTaskChannel,
+      provider,
+      model,
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      metadata,
+    }),
+  }).catch(() => {});
+}
+
 export async function startAgent(config) {
   settings = config;
   agentState = 'NAVIGATING';
   stepCount = 0;
   recentPageSignatures = [];
+  currentTaskId = config.taskId || null;
+  currentTaskSource = config.source || 'extension';
+  currentTaskChannel = config.channel || 'extension_popup';
+  currentAgentSessionId = config.agentSessionId || null;
   currentGoal = `Find and apply to "${settings.searchQuery}" jobs on LinkedIn using Easy Apply.`;
   
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
+  updateTaskStatus('running');
   
   // Step 1: Navigate to LinkedIn Jobs search
   const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(settings.searchQuery)}&f_AL=true`;
@@ -50,6 +114,8 @@ export function stopAgent() {
   lastActions = [];
   recentPageSignatures = [];
   broadcastLog('Stopped by user.');
+  updateTaskStatus('stopped');
+  completeAutomationSession();
   chrome.runtime.sendMessage({ action: 'agent_stopped' }).catch(() => {});
 }
 
@@ -68,6 +134,8 @@ async function runAgentLoop() {
   if (stepCount > MAX_STEPS) {
     broadcastLog('Max steps reached. Stopping.', true);
     agentState = 'IDLE';
+    updateTaskStatus('error');
+    completeAutomationSession();
     chrome.runtime.sendMessage({ action: 'agent_error', error: 'Max steps reached' }).catch(() => {});
     return;
   }
@@ -152,6 +220,8 @@ async function runAgentLoop() {
     if (decision.action === 'finish') {
       agentState = 'DONE';
       broadcastLog('Agent finished!');
+      updateTaskStatus('completed');
+      completeAutomationSession();
       chrome.runtime.sendMessage({ action: 'agent_finished' }).catch(() => {});
       return;
     }
@@ -173,6 +243,8 @@ async function runAgentLoop() {
       setTimeout(runAgentLoop, 5000);
     } else {
       agentState = 'IDLE';
+      updateTaskStatus('error');
+      completeAutomationSession();
       chrome.runtime.sendMessage({ action: 'agent_error', error: error.message }).catch(() => {});
     }
   }
@@ -365,6 +437,21 @@ async function callGemini(prompt) {
 
   const data = await res.json();
   const content = data.candidates[0].content.parts[0].text;
+  const usage = data.usageMetadata;
+
+  if (usage) {
+    await recordUsageToBackend({
+      provider: 'gemini',
+      model,
+      inputTokens: Number(usage.promptTokenCount || 0),
+      outputTokens: Number(usage.candidatesTokenCount || 0),
+      totalTokens: Number(usage.totalTokenCount || 0),
+      metadata: {
+        step: stepCount,
+        goal: currentGoal,
+      },
+    });
+  }
   
   try {
     return JSON.parse(content);
@@ -377,6 +464,7 @@ async function callGemini(prompt) {
 
 async function callAnthropic(prompt) {
   const baseUrl = settings.baseUrl || ANTHROPIC_DEFAULT_URL;
+  const model = settings.model || 'claude-3-5-sonnet-20241022';
   const res = await fetch(`${baseUrl}/v1/messages`, {
     method: 'POST',
     headers: {
@@ -386,7 +474,7 @@ async function callAnthropic(prompt) {
       'content-type': 'application/json'
     },
     body: JSON.stringify({
-      model: settings.model || 'claude-3-5-sonnet-20241022',
+      model,
       max_tokens: 1024,
       messages: [{ role: 'user', content: prompt }]
     })
@@ -399,12 +487,29 @@ async function callAnthropic(prompt) {
 
   const data = await res.json();
   const content = data.content[0].text;
+  const usage = data.usage;
+
+  if (usage) {
+    await recordUsageToBackend({
+      provider: 'anthropic',
+      model,
+      inputTokens: Number(usage.input_tokens || 0),
+      outputTokens: Number(usage.output_tokens || 0),
+      totalTokens: Number((usage.input_tokens || 0) + (usage.output_tokens || 0)),
+      metadata: {
+        step: stepCount,
+        goal: currentGoal,
+      },
+    });
+  }
+
   const jsonMatch = content.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/) || [null, content];
   return JSON.parse(jsonMatch[1]);
 }
 
 async function callOpenAICompat(prompt) {
   const baseUrl = settings.baseUrl || OPENAI_DEFAULT_URL;
+  const model = settings.model || 'gpt-4o';
   const res = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: 'POST',
     headers: {
@@ -412,7 +517,7 @@ async function callOpenAICompat(prompt) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: settings.model || 'gpt-4o',
+      model,
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: "json_object" }
     })
@@ -424,6 +529,22 @@ async function callOpenAICompat(prompt) {
   }
 
   const data = await res.json();
+  const usage = data.usage;
+
+  if (usage) {
+    await recordUsageToBackend({
+      provider: 'openai',
+      model,
+      inputTokens: Number(usage.prompt_tokens || 0),
+      outputTokens: Number(usage.completion_tokens || 0),
+      totalTokens: Number(usage.total_tokens || 0),
+      metadata: {
+        step: stepCount,
+        goal: currentGoal,
+      },
+    });
+  }
+
   return JSON.parse(data.choices[0].message.content);
 }
 

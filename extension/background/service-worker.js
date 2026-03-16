@@ -19,6 +19,29 @@ async function getAuthHeaders() {
   };
 }
 
+async function hasAuthenticatedUser() {
+  const headers = await getAuthHeaders();
+  return Boolean(headers.Authorization);
+}
+
+async function createTaskRun(payload) {
+  const headers = await getAuthHeaders();
+  if (!headers.Authorization) return null;
+
+  const response = await fetch(`${API_URL}/usage/tasks`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = await response.json();
+  return data?.data || null;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -76,8 +99,34 @@ async function sendMessageWithRetry(tabId, message, retries = 5, delayMs = 1200)
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'start_agent') {
-    startAgent(message.config);
-    sendResponse({ success: true });
+    (async () => {
+      let taskId = message.config?.taskId || null;
+
+      if (!taskId) {
+        const taskRun = await createTaskRun({
+          source: 'extension',
+          channel: 'extension_popup',
+          commandText: message.config?.searchQuery
+            ? `apply ${message.config.searchQuery}`
+            : 'start extension agent',
+          metadata: {
+            initiated_from: 'extension_popup',
+          },
+        });
+        taskId = taskRun?.id || null;
+      }
+
+      startAgent({
+        ...message.config,
+        taskId,
+        source: message.config?.source || 'extension',
+        channel: message.config?.channel || 'extension_popup',
+      });
+      sendResponse({ success: true, taskId });
+    })().catch((error) => {
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
   } else if (message.action === 'stop_agent') {
     stopAgent();
     sendResponse({ success: true });
@@ -181,6 +230,45 @@ async function stopPostAgent() {
   chrome.runtime.sendMessage({ action: 'post_agent_stopped' }).catch(() => {});
 }
 
+async function pollFrontendCommands() {
+  try {
+    if (!(await hasAuthenticatedUser())) return;
+
+    const response = await fetch(`${API_URL}/extension/commands`, {
+      headers: await getAuthHeaders(),
+    });
+
+    if (response.status === 401) return;
+
+    const data = await response.json();
+    if (!data.success || !data.data) return;
+
+    const cmd = data.data;
+    const settings = await new Promise((resolve) => {
+      chrome.storage.local.get(['llm_provider', 'llm_api_key', 'llm_model', 'llm_base_url'], resolve);
+    });
+    const roles = Array.isArray(cmd.payload?.roles) ? cmd.payload.roles.filter(Boolean) : [];
+    const locations = Array.isArray(cmd.payload?.locations) ? cmd.payload.locations.filter(Boolean) : [];
+    const searchQuery = [roles[0] || 'Software Engineer', locations[0] || ''].filter(Boolean).join(' ');
+
+    const config = {
+      provider: settings.llm_provider || 'gemini',
+      apiKey: settings.llm_api_key || '',
+      model: settings.llm_model || '',
+      baseUrl: settings.llm_base_url || '',
+      searchQuery,
+      taskId: cmd.payload?.taskId || null,
+      source: 'frontend',
+      channel: 'dashboard_chat',
+      agentSessionId: cmd.id,
+    };
+
+    startAgent(config);
+  } catch {
+    // Backend not reachable.
+  }
+}
+
 async function pollTelegramBridge() {
   try {
     const headers = await getAuthHeaders();
@@ -204,6 +292,9 @@ async function pollTelegramBridge() {
         model: cmd.payload.model || settings.llm_model || '',
         baseUrl: settings.llm_base_url || '',
         searchQuery: cmd.payload.searchQuery || 'Software Engineer',
+        taskId: cmd.payload.taskId || null,
+        source: 'telegram',
+        channel: 'telegram_bot',
       };
 
       startAgent(config);
@@ -268,7 +359,11 @@ async function pollTelegramBridge() {
 
 function startTelegramPolling() {
   if (telegramPollTimer) return;
-  telegramPollTimer = setInterval(pollTelegramBridge, TELEGRAM_POLL_INTERVAL);
+  telegramPollTimer = setInterval(() => {
+    pollFrontendCommands();
+    pollTelegramBridge();
+  }, TELEGRAM_POLL_INTERVAL);
+  pollFrontendCommands();
   pollTelegramBridge();
 }
 

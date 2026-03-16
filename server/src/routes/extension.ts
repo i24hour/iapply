@@ -5,6 +5,7 @@ import path from 'path';
 import { createError } from '../middleware/error-handler.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
+import { getTaskRunByAgentSession, updateTaskRunStatus } from '../lib/usage-tracking.js';
 
 const router = Router();
 
@@ -29,12 +30,17 @@ router.get('/commands', authenticate, async (req: AuthRequest, res: Response, ne
       .update({ status: 'running' })
       .eq('id', command.id);
 
+    const taskRun = await getTaskRunByAgentSession(command.id);
+
     res.json({
       success: true,
       data: {
         id: command.id,
         action: 'scrape_jobs',
-        payload: JSON.parse(command.search_query || '{}'),
+        payload: {
+          ...JSON.parse(command.search_query || '{}'),
+          taskId: taskRun?.id || null,
+        },
       },
     });
   } catch (error) {
@@ -59,6 +65,11 @@ router.post('/commands/:id/complete', authenticate, async (req: AuthRequest, res
       .from('agent_sessions')
       .update({ status: 'stopped' })
       .eq('id', req.params.id);
+
+    const taskRun = await getTaskRunByAgentSession(req.params.id);
+    if (taskRun?.id) {
+      await updateTaskRunStatus(taskRun.id, req.userId!, 'completed');
+    }
 
     res.json({ success: true });
   } catch (error) {
