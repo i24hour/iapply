@@ -2,12 +2,14 @@ import { startAgent, stopAgent, getAgentStatus } from './agent-core.js';
 
 const API_URL = 'https://iapply-telegram-bot.onrender.com';
 const TELEGRAM_POLL_INTERVAL = 5000;
+const MAX_DEBUG_LOGS = 250;
 
 let telegramPollTimer = null;
 let postAgentRunning = false;
 let postAgentTabId = null;
 let postAgentJobTitle = '';
 let postAgentKeywords = '';
+let debugLogs = [];
 
 async function getAuthHeaders() {
   const result = await chrome.storage.local.get(['supabase_token']);
@@ -40,6 +42,29 @@ async function createTaskRun(payload) {
 
   const data = await response.json();
   return data?.data || null;
+}
+
+function storeDebugLog(message, isError = false) {
+  const entry = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    message: String(message || ''),
+    isError: Boolean(isError),
+    timestamp: new Date().toISOString(),
+  };
+
+  debugLogs.push(entry);
+  if (debugLogs.length > MAX_DEBUG_LOGS) {
+    debugLogs = debugLogs.slice(-MAX_DEBUG_LOGS);
+  }
+
+  chrome.storage.local.set({ agent_debug_logs: debugLogs }).catch?.(() => {});
+  chrome.runtime.sendMessage({ action: 'agent_log', ...entry }).catch(() => {});
+  return entry;
+}
+
+async function emitAgentLog(message, isError = false) {
+  const entry = storeDebugLog(message, isError);
+  await forwardLogToBackend(entry.message, entry.isError);
 }
 
 function sleep(ms) {
@@ -166,11 +191,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const searchQuery = message.config?.searchQuery || '';
       const selectedResume = await fetchAndSelectResume(searchQuery);
       if (selectedResume) {
-        chrome.runtime.sendMessage({
-          action: 'agent_log',
-          message: `Resume selected for "${searchQuery}": ${selectedResume.file_name}`,
-          isError: false,
-        }).catch(() => {});
+        emitAgentLog(`Resume selected for "${searchQuery}": ${selectedResume.file_name}`).catch(() => {});
       }
 
       startAgent({
@@ -191,8 +212,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'get_agent_status') {
     sendResponse(getAgentStatus());
     return true;
+  } else if (message.action === 'get_agent_debug_state') {
+    sendResponse({
+      logs: debugLogs.slice(-120),
+      status: getAgentStatus(),
+    });
+    return true;
   } else if (message.action === 'agent_log') {
-    forwardLogToBackend(message.message, message.isError);
+    emitAgentLog(message.message, message.isError).catch(() => {});
   } else if (message.action === 'set_token') {
     chrome.storage.local.set({ supabase_token: message.token }, () => {
       startTelegramPolling();
@@ -258,19 +285,11 @@ async function startPostAgent(jobTitle, keywords) {
       keywords: postAgentKeywords,
     });
 
-    chrome.runtime.sendMessage({
-      action: 'agent_log',
-      message: `Post agent started for title: ${postAgentJobTitle || 'all'} | keywords: ${postAgentKeywords || 'none'}`,
-      isError: false,
-    }).catch(() => {});
+    emitAgentLog(`Post agent started for title: ${postAgentJobTitle || 'all'} | keywords: ${postAgentKeywords || 'none'}`).catch(() => {});
   } catch (error) {
     postAgentRunning = false;
     postAgentTabId = null;
-    chrome.runtime.sendMessage({
-      action: 'agent_log',
-      message: `Post agent failed to start: ${error.message}`,
-      isError: true,
-    }).catch(() => {});
+    emitAgentLog(`Post agent failed to start: ${error.message}`, true).catch(() => {});
     throw error;
   }
 }

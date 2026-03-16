@@ -51,9 +51,12 @@
     .stat-value { font-size: 20px; font-weight: 600; color: #1f2937; }
     .stat-label { font-size: 10px; color: #6b7280; text-transform: uppercase; }
     
-    .log-feed { background: #1f2937; color: #f3f4f6; font-family: monospace; font-size: 11px; padding: 10px; border-radius: 6px; height: 120px; overflow-y: auto; margin-top: 12px; }
-    .log-entry { margin-bottom: 4px; border-bottom: 1px solid #374151; padding-bottom: 4px;}
+    .log-feed { background: #1f2937; color: #f3f4f6; font-family: monospace; font-size: 11px; padding: 10px; border-radius: 6px; height: 220px; overflow-y: auto; margin-top: 12px; }
+    .log-entry { margin-bottom: 6px; border-bottom: 1px solid #374151; padding-bottom: 6px; line-height: 1.45; }
+    .log-entry.error { border-left: 3px solid #ef4444; padding-left: 8px; }
+    .log-entry.info { border-left: 3px solid #60a5fa; padding-left: 8px; }
     .log-time { color: #9ca3af; margin-right: 6px;}
+    .log-message { white-space: pre-wrap; word-break: break-word; }
     
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   </style>
@@ -155,7 +158,7 @@
       </div>
       
       <div class="log-feed" id="logFeed">
-        <div class="log-entry"><span class="log-time">[System]</span> Ready.</div>
+        <div class="log-entry info"><span class="log-time">[System]</span><span class="log-message"> Ready.</span></div>
       </div>
     </div>
     

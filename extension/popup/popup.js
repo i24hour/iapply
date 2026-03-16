@@ -26,6 +26,7 @@ const elStopPostBtn = document.getElementById('stopPostBtn');
 const elStatusDot = document.getElementById('statusDot');
 const elStatusText = document.getElementById('statusText');
 const elLogFeed = document.getElementById('logFeed');
+const MAX_RENDERED_LOGS = 150;
 
 function getExtensionCallbackUrl() {
   return chrome.runtime.getURL('auth/callback.html');
@@ -257,13 +258,39 @@ elStopPostBtn.addEventListener('click', () => {
 });
 
 // Helper for UI logging
-function addLog(message) {
-  const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+function formatTime(value) {
+  return new Date(value || Date.now()).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+}
+
+function addLog(message, isError = false, timestamp = null) {
+  const time = formatTime(timestamp);
   const div = document.createElement('div');
-  div.className = 'log-entry';
-  div.innerHTML = `<span class="log-time">[${time}]</span> ${message}`;
+  div.className = `log-entry ${isError ? 'error' : 'info'}`;
+  div.innerHTML = `<span class="log-time">[${time}]</span><span class="log-message"> ${message}</span>`;
   elLogFeed.appendChild(div);
+
+  while (elLogFeed.children.length > MAX_RENDERED_LOGS) {
+    elLogFeed.removeChild(elLogFeed.firstChild);
+  }
+
   elLogFeed.scrollTop = elLogFeed.scrollHeight;
+}
+
+function renderLogs(logs = []) {
+  elLogFeed.innerHTML = '';
+
+  if (!logs.length) {
+    addLog('Ready.', false, null);
+    return;
+  }
+
+  logs.forEach((log) => {
+    addLog(log.message, log.isError, log.timestamp);
+  });
 }
 
 // Check background status on popup open
@@ -279,6 +306,11 @@ chrome.runtime.sendMessage({ action: 'get_agent_status' }, (status) => {
   }
 });
 
+chrome.runtime.sendMessage({ action: 'get_agent_debug_state' }, (payload) => {
+  if (!payload) return;
+  renderLogs(payload.logs || []);
+});
+
 chrome.runtime.sendMessage({ action: 'get_post_agent_status' }, (status) => {
   if (status && status.running) {
     elStartPostBtn.style.display = 'none';
@@ -292,7 +324,7 @@ chrome.runtime.sendMessage({ action: 'get_post_agent_status' }, (status) => {
 // Listen for broadcasted logs from the background script
 chrome.runtime.onMessage.addListener((message) => {
   if (message.action === 'agent_log') {
-    addLog(message.message, message.isError);
+    addLog(message.message, message.isError, message.timestamp);
   } else if (message.action === 'agent_finished') {
     elStartAgentBtn.style.display = 'block';
     elStopAgentBtn.style.display = 'none';

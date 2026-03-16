@@ -630,6 +630,62 @@ function getInlineErrorText(el) {
   return errorEl?.textContent?.trim() || '';
 }
 
+function getFieldCurrentValue(el) {
+  if (!el) return '';
+  if (typeof el.value === 'string' && el.value.trim()) return el.value.trim();
+  return (el.getAttribute('aria-label') || el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function isPlaceholderSelection(value) {
+  const normalized = normalizeText(value);
+  return (
+    !normalized ||
+    normalized === 'select' ||
+    normalized.includes('select an option') ||
+    normalized.includes('choose an option') ||
+    normalized.includes('please select')
+  );
+}
+
+function isDropdownLikeElement(el) {
+  if (!el) return false;
+  const tag = (el.tagName || '').toLowerCase();
+  const role = (el.getAttribute('role') || '').toLowerCase();
+  const hasListbox = (el.getAttribute('aria-haspopup') || '').toLowerCase() === 'listbox';
+  return tag === 'select' || role === 'combobox' || hasListbox;
+}
+
+function getVisibleDropdownOptions() {
+  const selectors = [
+    '[role="option"]',
+    'li[role="option"]',
+    '.artdeco-dropdown__item',
+    '.fb-form-element__dropdown-option',
+    '.artdeco-typeahead__result',
+    '[data-test-text-selectable-option__text]',
+  ].join(', ');
+
+  const candidates = Array.from(document.querySelectorAll(selectors));
+  const unique = [];
+  const seen = new Set();
+
+  for (const candidate of candidates) {
+    const clickable = candidate.closest('[role="option"], li, button, div');
+    const target = clickable || candidate;
+    if (!target || !isElementVisible(target)) continue;
+
+    const text = (target.innerText || target.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text || isPlaceholderSelection(text)) continue;
+
+    const key = `${target.tagName}:${text}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push({ element: target, text });
+  }
+
+  return unique;
+}
+
 function isElementChecked(el) {
   if (el.checked !== undefined) return el.checked;
   if (el.getAttribute('aria-checked') === 'true') return true;
@@ -648,7 +704,7 @@ function isElementChecked(el) {
   const resumeCard = el.closest('.jobs-document-upload-redesign-card, .ui-attachment');
   if (resumeCard) {
      const inputInside = resumeCard.querySelector('input[type="radio"], input[type="checkbox"]');
-     if (inputInside && inputInside.checked) return true;
+     if (inputInside) return inputInside.checked; // returns true OR false, not undefined
   }
 
   return undefined;
@@ -738,16 +794,59 @@ async function setInputValue(element, value) {
 
 function fieldHasValidationError(field) {
   const errorText = getInlineErrorText(field);
+  const required =
+    field.required ||
+    field.getAttribute('aria-required') === 'true' ||
+    Boolean(field.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping')?.querySelector('[data-test-form-element-required]'));
+  const currentValue = getFieldCurrentValue(field);
   const invalid =
     field.getAttribute('aria-invalid') === 'true' ||
     field.getAttribute('data-test-form-element-error') === 'true' ||
     Boolean(errorText) ||
-    (typeof field.checkValidity === 'function' && !field.checkValidity());
+    (typeof field.checkValidity === 'function' && !field.checkValidity()) ||
+    (required && isDropdownLikeElement(field) && isPlaceholderSelection(currentValue));
 
   return {
     invalid,
     errorText,
   };
+}
+
+async function selectDropdownValue(field, desiredText = '', errorText = '') {
+  const label = getFieldLabel(field);
+  const normalizedDesired = normalizeText(
+    normalizeValueForField(label, desiredText || pickFallbackValue(label, field, errorText), field, errorText)
+  );
+
+  if (field.tagName === 'SELECT') {
+    const options = Array.from(field.querySelectorAll('option'));
+    const match = options.find((opt) => normalizeText(opt.textContent || '').includes(normalizedDesired));
+    const fallback = options.find((opt) => (opt.value || '').trim() !== '' && !isPlaceholderSelection(opt.textContent || ''));
+    const next = match || fallback;
+
+    if (!next) return false;
+
+    field.value = next.value;
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('blur', { bubbles: true }));
+    await sleep(150);
+    return !fieldHasValidationError(field).invalid;
+  }
+
+  await humanClick(field);
+  await sleep(350);
+
+  const options = getVisibleDropdownOptions();
+  const match = options.find((opt) => normalizeText(opt.text).includes(normalizedDesired));
+  const fallback = options[0];
+  const next = match || fallback;
+
+  if (!next) return false;
+
+  await humanClick(next.element);
+  await sleep(250);
+  return !fieldHasValidationError(field).invalid;
 }
 
 async function setValidatedFieldValue(field, rawValue) {
@@ -798,16 +897,24 @@ function listModalValidationIssues() {
   if (!modal) return [];
 
   const issues = [];
-  const fields = modal.querySelectorAll('input, textarea, select');
+  const fields = modal.querySelectorAll(
+    'input, textarea, select, [role="combobox"], button[aria-haspopup="listbox"], [role="button"][aria-haspopup="listbox"]'
+  );
 
   for (const field of fields) {
     if (!isElementVisible(field) || field.disabled || field.readOnly) continue;
 
     const label = getFieldLabel(field);
     const errorText = getInlineErrorText(field);
-    const value = (field.value || '').trim();
-    const required = field.required || field.getAttribute('aria-required') === 'true';
-    const invalid = field.getAttribute('aria-invalid') === 'true' || Boolean(errorText);
+    const value = getFieldCurrentValue(field);
+    const required =
+      field.required ||
+      field.getAttribute('aria-required') === 'true' ||
+      Boolean(field.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping')?.querySelector('[data-test-form-element-required]'));
+    const invalid =
+      field.getAttribute('aria-invalid') === 'true' ||
+      Boolean(errorText) ||
+      (isDropdownLikeElement(field) && required && isPlaceholderSelection(value));
     const type = (field.getAttribute('type') || '').toLowerCase();
 
     // Ignore hidden helper fields and search fields in dropdown widgets.
@@ -841,18 +948,16 @@ async function autoFixModalValidationIssues() {
     const { field, tag, type, label } = issue;
 
     try {
-      if (tag === 'select') {
-        const options = Array.from(field.querySelectorAll('option'));
-        const firstReal = options.find(opt => (opt.value || '').trim() !== '');
-        if (firstReal) {
-          field.value = firstReal.value;
-          field.dispatchEvent(new Event('change', { bubbles: true }));
-          field.dispatchEvent(new Event('input', { bubbles: true }));
+      if (tag === 'select' || isDropdownLikeElement(field)) {
+        const selected = await selectDropdownValue(field, pickFallbackValue(label, field, issue.errorText), issue.errorText);
+        if (selected) {
           fixed++;
-          details.push(`Selected "${firstReal.textContent.trim()}" for ${label || 'dropdown'}`);
+          details.push(`Selected an option for ${label || 'dropdown'}`);
+          postAgentLog(`Resolved dropdown issue for ${label || 'dropdown'}.`);
           await sleep(120);
           continue;
         }
+        postAgentLog(`Could not resolve dropdown issue for ${label || 'dropdown'} yet.`, true);
       }
 
       if (type === 'checkbox') {
@@ -860,6 +965,7 @@ async function autoFixModalValidationIssues() {
           await humanClick(field);
           fixed++;
           details.push(`Checked ${label || 'required checkbox'}`);
+          postAgentLog(`Checked required box for ${label || 'required checkbox'}.`);
           await sleep(120);
         }
         continue;
@@ -873,6 +979,7 @@ async function autoFixModalValidationIssues() {
           await humanClick(group[0]);
           fixed++;
           details.push(`Selected radio option for ${label || name || 'required question'}`);
+          postAgentLog(`Selected radio option for ${label || name || 'required question'}.`);
           await sleep(120);
         }
         continue;
@@ -883,13 +990,20 @@ async function autoFixModalValidationIssues() {
         await setValidatedFieldValue(field, fallback);
         fixed++;
         details.push(`Filled ${label || 'required field'} with "${fallback}"`);
+        postAgentLog(`Filled ${label || 'required field'} with "${fallback}" while resolving validation.`);
       }
     } catch (error) {
       console.warn('Failed to auto-fix field:', label, error);
+      postAgentLog(`Failed to auto-fix ${label || 'field'}: ${error.message}`, true);
     }
   }
 
   const remaining = listModalValidationIssues().length;
+  if (remaining > 0) {
+    postAgentLog(`Validation issues still remaining after auto-fix: ${remaining}`, true);
+  } else if (fixed > 0) {
+    postAgentLog(`All visible validation issues resolved automatically (${fixed} fixes).`);
+  }
   return { fixed, remaining, details };
 }
 
@@ -903,7 +1017,8 @@ function buildDOMSnapshot() {
   const interactiveSelectors = [
     'button', 'a[href]', 'input', 'select', 'textarea',
     '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
-    '[role="menuitem"]', '[role="tab"]', 'label', '.ui-attachment', '.jobs-document-upload-redesign-card'
+    '[role="menuitem"]', '[role="tab"]', '[role="combobox"]', '[aria-haspopup="listbox"]',
+    'label', '.ui-attachment', '.jobs-document-upload-redesign-card'
   ].join(', ');
 
   const elements = Array.from(document.querySelectorAll(interactiveSelectors));
@@ -928,7 +1043,7 @@ function buildDOMSnapshot() {
       type: el.getAttribute('type') || null,
       role: el.getAttribute('role') || null,
       text: text.substring(0, 100), // truncate very long text
-      value: el.value || undefined,
+      value: getFieldCurrentValue(el) || undefined,
       label: getFieldLabel(el) || undefined,
       required: el.required || el.getAttribute('aria-required') === 'true' || undefined,
       invalid: el.getAttribute('aria-invalid') === 'true' || undefined,
@@ -943,6 +1058,32 @@ function buildDOMSnapshot() {
     idCounter++;
   }
 
+  // Detect resume selection step in the modal
+  const modal = getEasyApplyModal();
+  const resumeCards = modal
+    ? Array.from(modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment')).filter(c => isElementVisible(c))
+    : [];
+  let resumeStepSummary = '';
+  if (resumeCards.length > 0) {
+    const resumeDetails = resumeCards.map(card => {
+      const nameEl = card.querySelector('h3, .ui-attachment__title, .jobs-document-upload-redesign-card__file-name, [data-test-text-selectable-option__text]');
+      const name = nameEl?.textContent?.trim() || 'Unknown';
+      const radio = card.querySelector('input[type="radio"], input[type="checkbox"]');
+      const selected = radio ? radio.checked : false;
+      return `- ${name} ${selected ? '[SELECTED]' : '[NOT SELECTED]'}`;
+    }).join('\n');
+
+    const showMoreBtn = modal ? Array.from(modal.querySelectorAll('button')).find(btn => {
+      const t = (btn.innerText || '').toLowerCase();
+      return t.includes('show') && (t.includes('more') || t.includes('resume'));
+    }) : null;
+    const hiddenNote = showMoreBtn
+      ? `\nWARNING: MORE RESUMES ARE HIDDEN! You MUST click "${showMoreBtn.innerText.trim()}" BEFORE selecting a resume.`
+      : '';
+
+    resumeStepSummary = `RESUME_STEP_DETECTED:\nThis is a RESUME SELECTION step. Visible resumes:\n${resumeDetails}${hiddenNote}\nFollow Rule 20 NOW.\n\n`;
+  }
+
   // Also grab raw text of the body to detect CAPTCHAs or page context broadly
   const validationIssues = listModalValidationIssues();
   const validationSummary = validationIssues
@@ -955,7 +1096,7 @@ function buildDOMSnapshot() {
     .join('\n');
 
   const modalText = getEasyApplyModal()?.innerText || '';
-  const rawText = `${validationSummary ? `FORM_VALIDATION_ERRORS:\n${validationSummary}\n\n` : ''}${modalText}\n\n${document.body.innerText}`.substring(0, 3500);
+  const rawText = `${resumeStepSummary}${validationSummary ? `FORM_VALIDATION_ERRORS:\n${validationSummary}\n\n` : ''}${modalText}\n\n${document.body.innerText}`.substring(0, 3500);
 
   return { 
     elements: snapshot, 
@@ -991,7 +1132,11 @@ async function executeAgentAction(decision) {
       if (isPrimaryApplyActionButton(el)) {
         const fixResult = await autoFixModalValidationIssues();
         if (fixResult.fixed > 0) {
-          console.log(`Auto-fixed ${fixResult.fixed} field(s) before proceeding.`);
+          postAgentLog(`Auto-fixed ${fixResult.fixed} field(s) before trying the progress button.`);
+        }
+        if (fixResult.remaining > 0) {
+          postAgentLog(`Skipping progress button because ${fixResult.remaining} validation issue(s) still remain visible.`, true);
+          return;
         }
       }
       await humanClick(el);
@@ -1025,26 +1170,11 @@ async function executeAgentAction(decision) {
       const form = el.closest('form');
       if (form) form.dispatchEvent(new Event('submit', { bubbles: true }));
     } else if (action === 'select_option') {
-      // Handle <select> dropdowns
-      el.focus();
-      const options = Array.from(el.querySelectorAll('option'));
-      const match = options.find(opt => 
-        opt.textContent.trim().toLowerCase().includes((value || '').toLowerCase())
-      );
-      if (match) {
-        el.value = match.value;
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        console.log(`Selected option: "${match.textContent.trim()}" in dropdown`);
+      const selected = await selectDropdownValue(el, value || '', getInlineErrorText(el));
+      if (selected) {
+        postAgentLog(`Selected dropdown value for ${getFieldLabel(el) || elementId}.`);
       } else {
-        // If no matching option, try selecting the first non-empty option
-        const firstReal = options.find(opt => opt.value && opt.value !== '');
-        if (firstReal) {
-          el.value = firstReal.value;
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          console.log(`Fallback selected: "${firstReal.textContent.trim()}"`);
-        }
+        postAgentLog(`Could not select dropdown value for ${getFieldLabel(el) || elementId}.`, true);
       }
     }
   } catch (error) {

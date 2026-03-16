@@ -168,6 +168,15 @@ async function runAgentLoop() {
     }
 
     broadcastLog(`Page: ${snapshot.url} | ${snapshot.elements.length} elements`);
+    if (snapshot.rawText?.includes('FORM_VALIDATION_ERRORS:')) {
+      const validationBlock = snapshot.rawText
+        .split('FORM_VALIDATION_ERRORS:\n')[1]
+        ?.split('\n\n')[0]
+        ?.trim();
+      if (validationBlock) {
+        broadcastLog(`Visible validation issues:\n${validationBlock}`, true);
+      }
+    }
 
     updatePageSignature(snapshot);
     const pageIsStagnant = isPageStagnant();
@@ -299,15 +308,101 @@ function parseActionKey(actionKey) {
   return { action, elementId, value };
 }
 
+function isPlaceholderFieldValue(value) {
+  const normalized = String(value || '').toLowerCase().trim();
+  return (
+    !normalized ||
+    normalized === 'select' ||
+    normalized.includes('select an option') ||
+    normalized.includes('choose an option') ||
+    normalized.includes('please select')
+  );
+}
+
+function hasMeaningfulFieldValue(element) {
+  const combined = `${element?.value || ''} ${element?.text || ''}`.trim();
+  return !isPlaceholderFieldValue(combined);
+}
+
+function isDropdownSnapshotElement(element) {
+  return element?.tag === 'select' || element?.role === 'combobox';
+}
+
+function expectsNumericSnapshotValue(element) {
+  const combined = `${element?.label || ''} ${element?.errorText || ''} ${element?.text || ''}`.toLowerCase();
+  return (
+    element?.type === 'number' ||
+    combined.includes('decimal') ||
+    combined.includes('numeric') ||
+    combined.includes('number') ||
+    combined.includes('ctc') ||
+    combined.includes('salary') ||
+    combined.includes('notice period') ||
+    combined.includes('experience')
+  );
+}
+
+function pickRecoveryValue(element) {
+  const combined = `${element?.label || ''} ${element?.text || ''}`.toLowerCase();
+  const numeric = expectsNumericSnapshotValue(element);
+
+  if (combined.includes('expected ctc') || combined.includes('expected salary')) {
+    return '300000';
+  }
+  if (combined.includes('current ctc') || combined.includes('current salary')) {
+    return '200000';
+  }
+  if (combined.includes('notice period')) {
+    return '1';
+  }
+  if (combined.includes('experience') || combined.includes('year')) {
+    return numeric ? '3' : '3 years';
+  }
+
+  return numeric ? '1' : 'Yes';
+}
+
 function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
   const repeated = parseActionKey(repeatedActionKey);
   const elements = snapshot.elements || [];
   const progressButton = elements.find(isPrimaryProgressButton);
+  const unresolvedField = elements.find((element) => {
+    if (isPrimaryProgressButton(element)) return false;
+    return element.invalid || (element.required && !hasMeaningfulFieldValue(element));
+  });
+
+  if (unresolvedField) {
+    const label = unresolvedField.label || unresolvedField.text || unresolvedField.id;
+    const reason = unresolvedField.errorText || (unresolvedField.required ? 'required value missing' : 'invalid value');
+    if (isDropdownSnapshotElement(unresolvedField)) {
+      return {
+        action: 'select_option',
+        elementId: unresolvedField.id,
+        value: pickRecoveryValue(unresolvedField),
+        reasoning: `Recovery mode: unresolved invalid dropdown detected for "${label}" (${reason}). Fixing it before clicking the progress button.`
+      };
+    }
+
+    if (unresolvedField.tag === 'input' || unresolvedField.tag === 'textarea') {
+      return {
+        action: unresolvedField.value ? 'clear_and_type' : 'type',
+        elementId: unresolvedField.id,
+        value: pickRecoveryValue(unresolvedField),
+        reasoning: `Recovery mode: unresolved invalid field detected for "${label}" (${reason}). Refilling it before clicking the progress button.`
+      };
+    }
+
+    return {
+      action: 'click',
+      elementId: unresolvedField.id,
+      reasoning: `Recovery mode: unresolved required control detected for "${label}" (${reason}). Focusing it before trying to continue.`
+    };
+  }
 
   if (repeated?.action === 'select_option') {
     const target = elements.find((e) => e.id === repeated.elementId);
 
-    if (target && target.value && !target.invalid && progressButton) {
+    if (target && hasMeaningfulFieldValue(target) && !target.invalid && progressButton) {
       return {
         action: 'click',
         elementId: progressButton.id,
@@ -389,7 +484,7 @@ CURRENT PAGE:
 - Page text (first 1500 chars): ${snapshot.rawText.substring(0, 1500)}
 
 INTERACTIVE ELEMENTS ON PAGE (id, tag, text):
-${snapshot.elements.map(e => `[${e.id}] <${e.tag}${e.type ? ' type=' + e.type : ''}${e.role ? ' role=' + e.role : ''}> "${e.text}"${e.label ? ' label="' + e.label + '"' : ''}${e.value ? ' value="' + e.value + '"' : ''}${e.checked ? ' checked=true' : ''}${e.required ? ' required=true' : ''}${e.invalid ? ' invalid=true' : ''}${e.errorText ? ' error="' + e.errorText + '"' : ''}`).join('\n')}
+${snapshot.elements.map(e => `[${e.id}] <${e.tag}${e.type ? ' type=' + e.type : ''}${e.role ? ' role=' + e.role : ''}> "${e.text}"${e.label ? ' label="' + e.label + '"' : ''}${e.value ? ' value="' + e.value + '"' : ''}${e.checked === true ? ' checked=true' : e.checked === false ? ' checked=false' : ''}${e.required ? ' required=true' : ''}${e.invalid ? ' invalid=true' : ''}${e.errorText ? ' error="' + e.errorText + '"' : ''}`).join('\n')}
 
 RULES:
 1. If the page shows "No results found", click "Clear all filters" or change the search query.
@@ -397,7 +492,7 @@ RULES:
 3. If you see an "Easy Apply" button on a job detail page, click it to start applying.
 4. Inside an Easy Apply modal, fill form fields and click "Next", "Review", or "Submit application".
 5. IMPORTANT: In the Easy Apply modal, only interact with elements that exist in the CURRENT SNAPSHOT. Do not try to answer questions from previous steps that are no longer visible.
-6. IMPORTANT: If a modal section (like Education or Experience) is already filled in or requires no further input, simply click the "Review", "Next", or "Continue" button at the bottom. EXCEPTION: On the Resume selection step, NEVER just click Next. You MUST verify the selected resume according to Rule 20.
+6. IMPORTANT: If a modal section (like Education or Experience) is already filled in or requires no further input, simply click the "Review", "Next", or "Continue" button. EXCEPTION: If the page text contains "RESUME_STEP_DETECTED", you are on a resume step — do NOT click Next. Follow Rule 20 FIRST.
 7. CRITICAL: NEVER repeat the exact same "type" or "clear_and_type" action on the same field twice in a row UNLESS the CURRENT SNAPSHOT still marks that field invalid or shows an error message for it. If the field's "value" in the CURRENT PAGE snapshot already shows your answer (e.g., value="10") and the field is not invalid, DO NOT type it again.
 8. SUCCESS STATE: If you see "Your application was sent" or "Applied", you MUST click the "Done" button or the "Dismiss" / "Close" (X) button to close the modal. DO NOT try to answer anymore questions on this success screen.
 9. After closing the success modal, look for the next job listing with "Easy Apply" and click it to start a new application.
@@ -408,21 +503,25 @@ RULES:
 13. For <select> dropdown elements (showing "Select an option" or similar), use "select_option" with the value to select.
 14. For radio buttons, click the specific radio option (e.g., click the element with text "Yes").
 15. After filling ALL new fields in a modal step, always click the primary action button ("Next", "Continue", "Review", or "Submit").
-16. If CURRENT PAGE text contains "FORM_VALIDATION_ERRORS", do NOT click Review/Next/Submit until those specific fields are fixed.
+16. If CURRENT PAGE text contains "FORM_VALIDATION_ERRORS", do NOT click Review/Next/Submit until those specific fields are fixed. If it contains "RESUME_STEP_DETECTED", do NOT click Next until you have followed Rule 20.
 17. If a field label or error mentions decimal, numeric, number, salary, CTC, notice period, or experience, enter digits only. Example: use "1" instead of "1 month".
 18. HARD RULE: If you selected the same dropdown value 2+ times and the field now has a non-empty value without invalid=true, STOP selecting it again and click the step button (Next/Review/Continue/Submit).
 19. HARD RULE: If the page appears unchanged after your previous action, you MUST switch strategy (different element, click progress button, or scroll). Never repeat the same action 3 times.
 ${resumeKeyword
-  ? `20. RESUME SELECTION (CRITICAL):
-    a) FIRST: If there is a "Show N more resumes", "See more", or "See all" button, click it IMMEDIATELY so you can see all available resumes.
-    b) EVALUATE: Find the resume whose filename contains "${resumeKeyword}". Even if a resume is already selected by default, DO NOT use it unless it is the best match.
-    c) CLICK: Click the radio button / container of the best matching resume to select it.
-    d) FINALLY: Only AFTER you are certain the correct resume is selected, click "Next" / "Review".`
-  : `20. RESUME SELECTION (CRITICAL):
-    a) FIRST: If there is a "Show N more resumes", "See more", or "See all" button, click it IMMEDIATELY so you can see all available resumes.
-    b) EVALUATE: Look at the filenames of ALL resumes. Choose the one that best matches the job title keywords: [${titleTokens.join(', ')}]. Even if a resume is already selected by default, DO NOT use it unless it is the best match.
-    c) CLICK: Click the radio button / container of the best matching resume to select it.
-    d) FINALLY: Only AFTER you are certain the correct resume is selected, click "Next" / "Review".`
+  ? `20. RESUME SELECTION (HARD RULE — NEVER SKIP):
+    When page text contains "RESUME_STEP_DETECTED", follow these steps IN ORDER:
+    a) If you see a "Show N more resumes" or "Show more" button, click it NOW and STOP. Do nothing else this turn.
+    b) After ALL resumes are visible: Look at every element with checked=true or checked=false. Find the one whose text/label contains "${resumeKeyword}".
+    c) If the currently checked=true resume does NOT contain "${resumeKeyword}" in its name, click the one that DOES to switch selection.
+    d) Only AFTER the correct resume shows checked=true, click "Next" / "Review".
+    e) NEVER click Next while the wrong resume is selected.`
+  : `20. RESUME SELECTION (HARD RULE — NEVER SKIP):
+    When page text contains "RESUME_STEP_DETECTED", follow these steps IN ORDER:
+    a) If you see a "Show N more resumes" or "Show more" button, click it NOW and STOP. Do nothing else this turn.
+    b) After ALL resumes are visible: Look at every element with checked=true or checked=false. Find the one whose text/label best matches job title keywords [${titleTokens.join(', ')}].
+    c) If the currently checked=true resume does NOT match the job title, click the better-matching one to switch selection.
+    d) Only AFTER the correct resume shows checked=true, click "Next" / "Review".
+    e) NEVER click Next while the wrong resume is selected.`
 }
 ${stuckHint}
 
