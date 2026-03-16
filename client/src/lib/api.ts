@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { TaskRun } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -99,4 +100,8 @@ export const applicationsApi = {
   list: (page = 1, pageSize = 10) =>
     api.get(`/applications?page=${page}&pageSize=${pageSize}`),
   get: (id: string) => api.get(`/applications/${id}`),
+};
+
+export const usageApi = {
+  listTasks: (limit = 20) => api.get<TaskRun[]>(`/usage/tasks?limit=${limit}`),
 };

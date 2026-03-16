@@ -1,7 +1,7 @@
 // Telegram Bot - Controls the Chrome Extension Agent remotely
 import TelegramBot from 'node-telegram-bot-api';
 import { pushCommand, onAgentLog, getAgentStatus, getRecentLogs } from './agent-commands.js';
-import { getUserById, getUserByTelegramId, countLinkedTelegramUsers } from './supabase.js';
+import { getUserById, getUserByTelegramId, countLinkedTelegramUsers, supabase } from './supabase.js';
 import { createTaskRun, recordUsageEvent, stopOpenTasksForUser } from './usage-tracking.js';
 
 let bot: TelegramBot | null = null;
@@ -281,10 +281,62 @@ export function startTelegramBot(token: string) {
       `▸ /status — Check if agent is running\n` +
       `▸ /whoami — Check account linking status\n` +
       `▸ /stats — Show linked user count\n` +
+      `▸ /usage — Show last 10 task usage rows\n` +
       `▸ /logs — View last 10 log entries\n` +
       `▸ /help — Show this help message`,
       { parse_mode: 'Markdown' }
     ).catch(console.error);
+  });
+
+  bot.onText(/\/usage/, async (msg) => {
+    const user = await getLinkedUser(msg.chat.id);
+    if (!user) {
+      sendSignInPrompt(msg.chat.id, '🔒 Please link your account first.');
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('task_runs')
+        .select('command_text, source, model, prompt_tokens, completion_tokens, total_tokens, total_cost_usd, started_at')
+        .eq('user_id', user.id)
+        .order('started_at', { ascending: false })
+        .limit(10);
+
+      if (error) {
+        console.error('Failed to fetch Telegram usage rows:', error);
+        bot!.sendMessage(msg.chat.id, '⚠️ Could not load usage right now.').catch(console.error);
+        return;
+      }
+
+      if (!data || data.length === 0) {
+        bot!.sendMessage(msg.chat.id, '📭 No usage rows yet. Start a task first.').catch(console.error);
+        return;
+      }
+
+      const lines = data.map((row: any, index: number) => {
+        const time = new Date(row.started_at).toLocaleString('en-IN', {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        const command = String(row.command_text || '').replace(/\s+/g, ' ').slice(0, 26);
+        const model = row.model || 'unknown';
+        const tokens = Number(row.total_tokens || 0).toLocaleString('en-US');
+        const cost = Number(row.total_cost_usd || 0).toFixed(4);
+        return `${index + 1}. \`${time}\` | ${row.source} | ${command}\n   \`${model}\` | in ${row.prompt_tokens || 0} | out ${row.completion_tokens || 0} | total ${tokens} | $${cost}`;
+      });
+
+      bot!.sendMessage(
+        msg.chat.id,
+        `📊 *Last 10 Usage Rows*\n\n${lines.join('\n\n')}`,
+        { parse_mode: 'Markdown' }
+      ).catch(console.error);
+    } catch (error) {
+      console.error('Unexpected Telegram usage error:', error);
+      bot!.sendMessage(msg.chat.id, '⚠️ Could not load usage right now.').catch(console.error);
+    }
   });
 
   // Conversational Fallback

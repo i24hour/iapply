@@ -84,6 +84,27 @@ export interface AutomationStatus {
   startedAt?: Date;
 }
 
+export interface TaskRun {
+  id: string;
+  user_id: string;
+  user_email: string;
+  source: 'frontend' | 'extension' | 'telegram';
+  channel: string;
+  command_text: string;
+  provider?: string | null;
+  model?: string | null;
+  status: 'queued' | 'running' | 'completed' | 'stopped' | 'error';
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  input_cost_usd: number;
+  output_cost_usd: number;
+  total_cost_usd: number;
+  started_at: string;
+  last_activity_at?: string | null;
+  completed_at?: string | null;
+}
+
 export function formatDate(date: Date | string): string {
   const d = new Date(date);
   return d.toLocaleDateString('en-US', {

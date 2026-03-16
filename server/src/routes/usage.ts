@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
 import { createTaskRun, recordUsageEvent, updateTaskRunStatus } from '../lib/usage-tracking.js';
+import { supabase } from '../lib/supabase.js';
 
 const router = Router();
 
@@ -106,6 +107,33 @@ router.post('/tasks/:id/status', authenticate, async (req: AuthRequest, res) => 
     }
     console.error('Failed to update task status:', error);
     res.status(500).json({ success: false, error: 'Failed to update task status' });
+  }
+});
+
+router.get('/tasks', authenticate, async (req: AuthRequest, res) => {
+  if (!req.userId) {
+    return res.status(401).json({ success: false, error: 'Not authenticated' });
+  }
+
+  const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 100);
+
+  try {
+    const { data, error } = await supabase
+      .from('task_runs')
+      .select('*')
+      .eq('user_id', req.userId)
+      .order('started_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('Failed to list task runs:', error);
+      return res.status(500).json({ success: false, error: 'Failed to load task usage' });
+    }
+
+    res.json({ success: true, data: data || [] });
+  } catch (error) {
+    console.error('Unexpected task listing error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load task usage' });
   }
 });
 

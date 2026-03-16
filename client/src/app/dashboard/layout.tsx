@@ -12,14 +12,15 @@ import {
   getPendingExtensionReturnTo,
 } from '@/lib/extension-auth';
 import {
+  BarChart3,
   Briefcase,
-  LayoutDashboard,
-  User,
-  FileText,
-  Settings,
-  LogOut,
   ClipboardList,
+  FileText,
+  LayoutDashboard,
+  LogOut,
   Menu,
+  Settings,
+  User,
   X,
 } from 'lucide-react';
 
@@ -29,6 +30,7 @@ const navigation = [
   { name: 'Resume', href: '/dashboard/resume', icon: FileText },
   { name: 'Preferences', href: '/dashboard/preferences', icon: Settings },
   { name: 'Applications', href: '/dashboard/applications', icon: ClipboardList },
+  { name: 'Usage', href: '/dashboard/usage', icon: BarChart3 },
 ];
 
 export default function DashboardLayout({
