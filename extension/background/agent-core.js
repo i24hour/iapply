@@ -89,7 +89,9 @@ export async function startAgent(config) {
   currentTaskSource = config.source || 'extension';
   currentTaskChannel = config.channel || 'extension_popup';
   currentAgentSessionId = config.agentSessionId || null;
-  currentGoal = `Find and apply to "${settings.searchQuery}" jobs on LinkedIn using Easy Apply.`;
+  currentGoal = config.userGoal?.trim()
+    ? `User request: "${config.userGoal}". Execute this on LinkedIn Jobs using Easy Apply where possible. Primary search query: "${settings.searchQuery}".`
+    : `Find and apply to "${settings.searchQuery}" jobs on LinkedIn using Easy Apply.`;
   
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
   if (settings.selectedResume) {

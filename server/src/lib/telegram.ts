@@ -21,6 +21,7 @@ type TelegramIntentName =
 type TelegramIntent = {
   intent: TelegramIntentName;
   query?: string;
+  userGoal?: string;
   reply?: string;
 };
 
@@ -114,7 +115,7 @@ function detectDirectIntent(text: string): TelegramIntent | null {
 
   const applyQuery = extractApplyQuery(normalized);
   if (applyQuery) {
-    return { intent: 'apply', query: applyQuery };
+    return { intent: 'apply', query: applyQuery, userGoal: normalized };
   }
 
   if (/\b(screenshot|screen shot|show me|show current|photo|snap|capture)\b/i.test(normalized)) {
@@ -166,6 +167,7 @@ async function classifyTelegramIntent(params: {
 }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
+  const model = process.env.TELEGRAM_AGENT_MODEL?.trim() || 'gemini-3.1-flash-lite-preview';
 
   const status = getAgentStatus(params.userId);
   const logs = getRecentLogs(params.userId, 10)
@@ -191,10 +193,11 @@ Recent logs:
 ${logs || 'No recent logs.'}
 
 Return strict JSON only with this shape:
-{"intent":"apply|screenshot|stop|status|usage|logs|help|stats|whoami|chat","query":"string","reply":"string"}
+{"intent":"apply|screenshot|stop|status|usage|logs|help|stats|whoami|chat","query":"string","userGoal":"string","reply":"string"}
 
 Rules:
 - If the user asks to apply, extract a clean job query in "query".
+- If the user asks to apply, put the full instruction in "userGoal".
 - Remove resume-specific trailing phrases like "with my product resume"; the job query should stay role-focused.
 - If intent is not "chat", keep "reply" empty.
 - If intent is "chat", give a short helpful plain-text reply in "reply".
@@ -204,7 +207,7 @@ User message:
 ${params.message}`;
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -227,7 +230,7 @@ ${params.message}`;
       source: 'telegram',
       channel: 'telegram_bot',
       provider: 'gemini',
-      model: 'gemini-2.0-flash-lite',
+      model,
       inputTokens: Number(usage.promptTokenCount || 0),
       outputTokens: Number(usage.candidatesTokenCount || 0),
       totalTokens: Number(usage.totalTokenCount || 0),
@@ -245,6 +248,7 @@ ${params.message}`;
     if (!parsed?.intent) return null;
     if (parsed.intent === 'apply') {
       parsed.query = normalizeApplyQuery(parsed.query || '');
+      parsed.userGoal = String(parsed.userGoal || params.message).trim();
     }
     return parsed;
   } catch (error) {
@@ -475,7 +479,8 @@ export function startTelegramBot(token: string) {
     chatId: number,
     user: NonNullable<Awaited<ReturnType<typeof getLinkedUser>>>,
     query: string,
-    originalText: string
+    originalText: string,
+    userGoal?: string
   ) {
     const cleanedQuery = normalizeApplyQuery(query);
     if (!cleanedQuery) {
@@ -506,7 +511,9 @@ export function startTelegramBot(token: string) {
       type: 'start_agent',
       payload: {
         searchQuery: cleanedQuery,
+        userGoal: (userGoal || originalText || cleanedQuery).trim(),
         provider: 'gemini',
+        model: process.env.TELEGRAM_AGENT_MODEL?.trim() || 'gemini-3.1-flash-lite-preview',
         apiKey: process.env.GEMINI_API_KEY || '',
         taskId: taskRun?.id || undefined,
       },
@@ -535,7 +542,7 @@ export function startTelegramBot(token: string) {
   ) {
     switch (intent.intent) {
       case 'apply':
-        await startApply(msg.chat.id, user, intent.query || '', msg.text || '');
+        await startApply(msg.chat.id, user, intent.query || '', msg.text || '', intent.userGoal);
         return true;
       case 'screenshot':
         requestScreenshot(msg.chat.id, user.id);
@@ -580,7 +587,7 @@ export function startTelegramBot(token: string) {
       return;
     }
 
-    await startApply(msg.chat.id, user, match?.[1] || '', msg.text || '');
+    await startApply(msg.chat.id, user, match?.[1] || '', msg.text || '', msg.text || '');
   });
 
   bot.onText(/\/stop/, async (msg) => {

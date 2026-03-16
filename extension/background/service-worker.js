@@ -355,6 +355,7 @@ async function pollTelegramBridge() {
         model: cmd.payload.model || settings.llm_model || '',
         baseUrl: settings.llm_base_url || '',
         searchQuery: cmd.payload.searchQuery || 'Software Engineer',
+        userGoal: cmd.payload.userGoal || cmd.payload.searchQuery || 'Apply to relevant LinkedIn jobs.',
         taskId: cmd.payload.taskId || null,
         source: 'telegram',
         channel: 'telegram_bot',
