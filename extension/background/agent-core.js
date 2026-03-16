@@ -92,6 +92,11 @@ export async function startAgent(config) {
   currentGoal = `Find and apply to "${settings.searchQuery}" jobs on LinkedIn using Easy Apply.`;
   
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
+  if (settings.selectedResume) {
+    broadcastLog(`Selected resume for "${settings.searchQuery}": ${settings.selectedResume.file_name}`);
+  } else {
+    broadcastLog(`No matching resume found — LinkedIn will use your profile default.`);
+  }
   updateTaskStatus('running');
   
   // Step 1: Navigate to LinkedIn Jobs search
@@ -357,9 +362,13 @@ function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
 // ---- LLM Provider Abstraction ----
 
 async function callLLM(snapshot, stuckHint = '') {
+  const resumeLine = settings.selectedResume
+    ? `\nSELECTED RESUME: "${settings.selectedResume.file_name}" (this is the best-matched resume for this job role)`
+    : '';
+
   const prompt = `You are an autonomous browser agent. You control a Chrome browser on LinkedIn.
 
-YOUR GOAL: ${currentGoal}
+YOUR GOAL: ${currentGoal}${resumeLine}
 
 CURRENT PAGE:
 - URL: ${snapshot.url}
@@ -390,6 +399,7 @@ RULES:
 17. If a field label or error mentions decimal, numeric, number, salary, CTC, notice period, or experience, enter digits only. Example: use "1" instead of "1 month".
 18. HARD RULE: If you selected the same dropdown value 2+ times and the field now has a non-empty value without invalid=true, STOP selecting it again and click the step button (Next/Review/Continue/Submit).
 19. HARD RULE: If the page appears unchanged after your previous action, you MUST switch strategy (different element, click progress button, or scroll). Never repeat the same action 3 times.
+${settings.selectedResume ? `20. RESUME SELECTION: If the Easy Apply modal shows a list of resumes to choose from, select the one named "${settings.selectedResume.file_name}". If that exact name is not listed, choose the closest match. If no resume list is shown, proceed normally.` : ''}
 ${stuckHint}
 
 AVAILABLE ACTIONS:

@@ -42,6 +42,26 @@ const upload = multer({
   },
 });
 
+// Get all resumes for the user
+router.get('/all', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { data: resumes, error } = await supabase
+      .from('resumes')
+      .select('*')
+      .eq('user_id', req.userId)
+      .order('uploaded_at', { ascending: false });
+
+    if (error) {
+      console.error('Supabase error:', error);
+      return next(error);
+    }
+
+    res.json({ success: true, data: resumes || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Get resume
 router.get('/', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {

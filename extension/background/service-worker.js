@@ -46,6 +46,53 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Score a resume against a job-title search query using keyword overlap.
+// Returns 0 if no tokens match, or the count of matching tokens.
+function scoreResumeForQuery(resume, queryTokens) {
+  if (!queryTokens.length) return 0;
+  const fileName = (resume.file_name || '').toLowerCase();
+  const skills = Array.isArray(resume.parsed_data?.skills)
+    ? resume.parsed_data.skills.join(' ').toLowerCase()
+    : '';
+  const combined = `${fileName} ${skills}`;
+  return queryTokens.reduce((score, token) => score + (combined.includes(token) ? 1 : 0), 0);
+}
+
+// Fetch all uploaded resumes and return the one most relevant to the search query.
+async function fetchAndSelectResume(searchQuery) {
+  const headers = await getAuthHeaders();
+  if (!headers.Authorization) return null;
+
+  try {
+    const res = await fetch(`${API_URL}/resume/all`, { headers });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const resumes = data?.data || [];
+    if (!resumes.length) return null;
+    if (resumes.length === 1) return resumes[0];
+
+    const queryTokens = (searchQuery || '')
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => t.length > 2);
+
+    let bestResume = resumes[0];
+    let bestScore = scoreResumeForQuery(resumes[0], queryTokens);
+
+    for (let i = 1; i < resumes.length; i++) {
+      const score = scoreResumeForQuery(resumes[i], queryTokens);
+      if (score > bestScore) {
+        bestScore = score;
+        bestResume = resumes[i];
+      }
+    }
+
+    return bestResume;
+  } catch {
+    return null;
+  }
+}
+
 function waitForTabLoad(tabId, urlIncludes = 'linkedin.com') {
   return new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
@@ -116,11 +163,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         taskId = taskRun?.id || null;
       }
 
+      const searchQuery = message.config?.searchQuery || '';
+      const selectedResume = await fetchAndSelectResume(searchQuery);
+      if (selectedResume) {
+        chrome.runtime.sendMessage({
+          action: 'agent_log',
+          message: `Resume selected for "${searchQuery}": ${selectedResume.file_name}`,
+          isError: false,
+        }).catch(() => {});
+      }
+
       startAgent({
         ...message.config,
         taskId,
         source: message.config?.source || 'extension',
         channel: message.config?.channel || 'extension_popup',
+        selectedResume: selectedResume || null,
       });
       sendResponse({ success: true, taskId });
     })().catch((error) => {
@@ -263,6 +321,11 @@ async function pollFrontendCommands() {
       agentSessionId: cmd.id,
     };
 
+    const selectedResume = await fetchAndSelectResume(searchQuery);
+    if (selectedResume) {
+      config.selectedResume = selectedResume;
+    }
+
     startAgent(config);
   } catch {
     // Backend not reachable.
@@ -296,6 +359,11 @@ async function pollTelegramBridge() {
         source: 'telegram',
         channel: 'telegram_bot',
       };
+
+      const selectedResume = await fetchAndSelectResume(config.searchQuery);
+      if (selectedResume) {
+        config.selectedResume = selectedResume;
+      }
 
       startAgent(config);
 
