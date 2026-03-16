@@ -258,18 +258,12 @@ router.post('/refresh', async (req, res) => {
 });
 
 // ─── POST /auth/verify — verify a token (used by extension) ──────────────────
-router.post('/verify', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) {
-    return res.status(401).json({ success: false, error: 'No token' });
+router.post('/verify', authenticate, async (req: AuthRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
 
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) {
-    return res.status(401).json({ success: false, error: 'Invalid token' });
-  }
-
-  res.json({ success: true, data: { id: data.user.id, email: data.user.email } });
+  res.json({ success: true, data: { id: req.user.id, email: req.user.email } });
 });
 
 export default router;

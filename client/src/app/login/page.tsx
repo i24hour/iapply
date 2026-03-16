@@ -42,7 +42,15 @@ export default function LoginPage() {
 
     const token = localStorage.getItem('auth_token');
     if (safeReturnTo && token) {
-      window.location.replace(buildExtensionRedirectUrl(safeReturnTo, token));
+      // Verify token before auto-redirecting
+      authApi.me()
+        .then(() => {
+          window.location.replace(buildExtensionRedirectUrl(safeReturnTo, token));
+        })
+        .catch(() => {
+          // Token is invalid, let them log in normally
+          localStorage.removeItem('auth_token');
+        });
     }
   }, []);
 
