@@ -397,8 +397,11 @@ function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
   const repeated = parseActionKey(repeatedActionKey);
   const elements = snapshot.elements || [];
   const progressButton = elements.find(isPrimaryProgressButton);
+
+  // Skip the element we are already stuck on — retrying it won't help.
   const unresolvedField = elements.find((element) => {
     if (isPrimaryProgressButton(element)) return false;
+    if (repeated && element.id === repeated.elementId) return false;
     return element.invalid || (element.required && !hasMeaningfulFieldValue(element));
   });
 
