@@ -1069,9 +1069,10 @@ async function autoSelectBestResume(resumeKeyword, titleTokens) {
     }
   }
 
-  // Step 4: Score each resume card by keyword overlap
+  // Step 4: Score each resume card by keyword overlap; break ties with "Last used" date
   let bestCard = null;
   let bestScore = -1;
+  let bestLastUsed = 0;
   let currentlySelectedCard = null;
 
   for (const card of resumeCards) {
@@ -1091,8 +1092,16 @@ async function autoSelectBestResume(resumeKeyword, titleTokens) {
       if (nameLower.includes(kw)) score++;
     }
 
-    if (score > bestScore) {
+    // Parse "Last used on M/DD/YYYY" for tiebreaking
+    const cardText = (card.textContent || '').replace(/\s+/g, ' ');
+    const dateMatch = cardText.match(/last used on\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/i);
+    const lastUsed = dateMatch
+      ? new Date(+dateMatch[3], +dateMatch[1] - 1, +dateMatch[2]).getTime()
+      : 0;
+
+    if (score > bestScore || (score === bestScore && lastUsed > bestLastUsed)) {
       bestScore = score;
+      bestLastUsed = lastUsed;
       bestCard = { card, name, radio, score };
     }
   }

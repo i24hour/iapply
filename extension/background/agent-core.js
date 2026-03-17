@@ -170,6 +170,7 @@ async function runAgentLoop() {
     broadcastLog(`Page: ${snapshot.url} | ${snapshot.elements.length} elements`);
 
     // Auto-select resume if we detect a resume step (hardcoded, no LLM needed)
+    let resumeAutoSelectedHint = '';
     if (snapshot.rawText?.includes('RESUME_STEP_DETECTED')) {
       broadcastLog('Resume selection step detected — running auto-select...');
       const goalText = (settings.userGoal || settings.searchQuery || '').toLowerCase();
@@ -192,6 +193,10 @@ async function runAgentLoop() {
             if (refreshed) {
               snapshot = refreshed;
             }
+            resumeAutoSelectedHint = `\n\nSYSTEM: Resume "${result.selectedName}" was just auto-selected. DO NOT click any other resume card. Simply click the "Next" or "Review" button now.`;
+          } else {
+            // Already correct or no match — tell LLM not to change it
+            resumeAutoSelectedHint = `\n\nSYSTEM: Resume auto-selection has already run. The best matching resume is already checked. DO NOT click any resume card. Simply click the "Next" or "Review" button now.`;
           }
         }
       } catch (err) {
@@ -242,7 +247,7 @@ async function runAgentLoop() {
     }
 
     if (!decision) {
-      decision = await callLLM(snapshot, stuckHint);
+      decision = await callLLM(snapshot, stuckHint + resumeAutoSelectedHint);
     }
 
     broadcastLog(`LLM: ${decision.reasoning}`);
