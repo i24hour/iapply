@@ -413,6 +413,17 @@ function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
   if (unresolvedField) {
     const label = unresolvedField.label || unresolvedField.text || unresolvedField.id;
     const reason = unresolvedField.errorText || (unresolvedField.required ? 'required value missing' : 'invalid value');
+
+    // If the field already has a value but LinkedIn still marks it invalid,
+    // don't overwrite it — force forward and let LinkedIn validate on submit.
+    if (unresolvedField.invalid && hasMeaningfulFieldValue(unresolvedField) && progressButton) {
+      return {
+        action: 'click',
+        elementId: progressButton.id,
+        reasoning: `Recovery mode: "${label}" is marked invalid but already has a value. Forcing forward to avoid overwriting correct data.`
+      };
+    }
+
     if (isDropdownSnapshotElement(unresolvedField)) {
       return {
         action: 'select_option',
