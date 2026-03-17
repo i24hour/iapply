@@ -355,6 +355,13 @@ async function getAuth() {
 // Human-like typing
 async function typeText(element, text) {
   element.focus();
+  if (document.hidden) {
+    element.value += text;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(100);
+    return;
+  }
   for (const char of text) {
     element.value += char;
     element.dispatchEvent(new Event('input', { bubbles: true }));
@@ -364,6 +371,11 @@ async function typeText(element, text) {
 
 // Natural scroll
 async function smoothScroll(distance) {
+  if (document.hidden) {
+    window.scrollBy(0, distance);
+    await sleep(100);
+    return;
+  }
   const steps = 10;
   const stepSize = distance / steps;
   for (let i = 0; i < steps; i++) {
@@ -376,16 +388,23 @@ async function smoothScroll(distance) {
 // Click with human-like behavior
 async function humanClick(element) {
   // Scroll element into view
-  element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  await sleep(500);
+  if (document.hidden) {
+    element.scrollIntoView({ behavior: 'instant', block: 'center' });
+    await sleep(100);
+  } else {
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    await sleep(500);
+  }
   
   // Simulate hover
   element.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-  await sleep(randomDelay(200, 500));
+  await sleep(document.hidden ? 50 : randomDelay(200, 500));
   
   // Click
   element.click();
-  await humanDelay();
+  if (!document.hidden) {
+    await humanDelay();
+  }
 }
 
 // Scrape job listings from LinkedIn
@@ -1013,6 +1032,89 @@ function isPrimaryApplyActionButton(el) {
   return text.includes('review') || text.includes('next') || text.includes('continue') || text.includes('submit application') || text.includes('submit');
 }
 
+// ==========================================
+// HARDCODED RESUME SELECTION (deterministic)
+// ==========================================
+
+async function autoSelectBestResume(resumeKeyword, titleTokens) {
+  const modal = getEasyApplyModal();
+  if (!modal) return { changed: false, reason: 'no modal' };
+
+  // Step 1: Click "Show more resumes" repeatedly until all are visible
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const showMoreBtn = Array.from(modal.querySelectorAll('button')).find(btn => {
+      const t = (btn.innerText || '').toLowerCase();
+      return isElementVisible(btn) && t.includes('show') && (t.includes('more') || t.includes('resume'));
+    });
+    if (!showMoreBtn) break;
+    postAgentLog(`Clicking "${showMoreBtn.innerText.trim()}" to reveal hidden resumes...`);
+    await humanClick(showMoreBtn);
+    await sleep(1000);
+  }
+
+  // Step 2: Gather all visible resume cards
+  const resumeCards = Array.from(
+    modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment')
+  ).filter(c => isElementVisible(c));
+
+  if (!resumeCards.length) return { changed: false, reason: 'no resume cards found' };
+
+  // Step 3: Build keyword list
+  const keywords = [];
+  if (resumeKeyword) keywords.push(resumeKeyword.toLowerCase());
+  if (Array.isArray(titleTokens)) {
+    for (const t of titleTokens) {
+      const lower = t.toLowerCase();
+      if (lower.length > 2 && !keywords.includes(lower)) keywords.push(lower);
+    }
+  }
+
+  // Step 4: Score each resume card by keyword overlap
+  let bestCard = null;
+  let bestScore = -1;
+  let currentlySelectedCard = null;
+
+  for (const card of resumeCards) {
+    const nameEl = card.querySelector(
+      'h3, .ui-attachment__title, .jobs-document-upload-redesign-card__file-name, [data-test-text-selectable-option__text]'
+    );
+    const name = (nameEl?.textContent || '').trim();
+    const nameLower = name.toLowerCase();
+    const radio = card.querySelector('input[type="radio"], input[type="checkbox"]');
+
+    if (radio && radio.checked) {
+      currentlySelectedCard = { card, name, radio };
+    }
+
+    let score = 0;
+    for (const kw of keywords) {
+      if (nameLower.includes(kw)) score++;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestCard = { card, name, radio, score };
+    }
+  }
+
+  if (!bestCard || bestScore <= 0) {
+    postAgentLog(`No resume matched keywords [${keywords.join(', ')}]. Keeping current selection.`);
+    return { changed: false, reason: 'no keyword match' };
+  }
+
+  if (currentlySelectedCard && currentlySelectedCard.card === bestCard.card) {
+    postAgentLog(`Best resume "${bestCard.name}" is already selected.`);
+    return { changed: false, reason: 'already correct' };
+  }
+
+  const clickTarget = bestCard.radio || bestCard.card;
+  postAgentLog(`Selecting resume "${bestCard.name}" (score: ${bestScore}) for keywords [${keywords.join(', ')}]`);
+  await humanClick(clickTarget);
+  await sleep(500);
+
+  return { changed: true, selectedName: bestCard.name };
+}
+
 function buildDOMSnapshot() {
   const interactiveSelectors = [
     'button', 'a[href]', 'input', 'select', 'textarea',
@@ -1242,7 +1344,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ snapshot: buildDOMSnapshot() });
     return true;
   }
-  
+
+  if (message.action === 'auto_select_resume') {
+    autoSelectBestResume(message.resumeKeyword, message.titleTokens).then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
+
   if (message.action === 'execute_decision') {
     executeAgentAction(message.decision).then(() => {
       sendResponse({ success: true });

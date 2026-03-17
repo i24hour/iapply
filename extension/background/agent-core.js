@@ -152,7 +152,7 @@ async function runAgentLoop() {
     
     // 1. Get snapshot from Content Script (includes URL and title)
     broadcastLog('Building DOM Snapshot...');
-    const snapshot = await getDOMSnapshotFromActiveTab();
+    let snapshot = await getDOMSnapshotFromActiveTab();
     
     if (!snapshot) {
       broadcastLog('No snapshot received. Retrying in 3s...', true);
@@ -168,6 +168,37 @@ async function runAgentLoop() {
     }
 
     broadcastLog(`Page: ${snapshot.url} | ${snapshot.elements.length} elements`);
+
+    // Auto-select resume if we detect a resume step (hardcoded, no LLM needed)
+    if (snapshot.rawText?.includes('RESUME_STEP_DETECTED')) {
+      broadcastLog('Resume selection step detected — running auto-select...');
+      const goalText = (settings.userGoal || settings.searchQuery || '').toLowerCase();
+      const hintMatch = goalText.match(/\b(\w+)\s+resume\b/i);
+      const resumeKeyword = hintMatch?.[1]?.toLowerCase() || null;
+      const titleTokens = (settings.searchQuery || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
+
+      try {
+        const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
+        if (tabs.length) {
+          const result = await chrome.tabs.sendMessage(tabs[0].id, {
+            action: 'auto_select_resume',
+            resumeKeyword,
+            titleTokens,
+          });
+          if (result?.changed) {
+            broadcastLog(`Auto-selected resume: ${result.selectedName}`);
+            // Rebuild snapshot to reflect the change
+            const refreshed = await getDOMSnapshotFromActiveTab();
+            if (refreshed) {
+              snapshot = refreshed;
+            }
+          }
+        }
+      } catch (err) {
+        broadcastLog(`Resume auto-select error: ${err.message}`, true);
+      }
+    }
+
     if (snapshot.rawText?.includes('FORM_VALIDATION_ERRORS:')) {
       const validationBlock = snapshot.rawText
         .split('FORM_VALIDATION_ERRORS:\n')[1]
