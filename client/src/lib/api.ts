@@ -89,11 +89,26 @@ export const automationApi = {
       source?: 'frontend' | 'extension' | 'telegram';
       channel?: string;
       commandText?: string;
+      provider?: string;
+      model?: string;
+      apiKey?: string;
+      baseUrl?: string;
     }
   ) => api.post('/automation/start', { count, ...options }),
   pause: () => api.post('/automation/pause'),
   stop: () => api.post('/automation/stop'),
   status: () => api.get('/automation/status'),
+};
+
+export const extensionApi = {
+  live: (logs = 30, screenshots = 3, recordings = 12) =>
+    api.get('/agent/live', { params: { logs, screenshots, recordings } }),
+  requestScreenshot: () =>
+    api.post('/agent/request-screenshot'),
+  startRecording: () =>
+    api.post('/agent/start-recording'),
+  stopRecording: () =>
+    api.post('/agent/stop-recording'),
 };
 
 export const applicationsApi = {

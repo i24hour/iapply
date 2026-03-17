@@ -12,6 +12,10 @@ const startAutomationSchema = z.object({
   source: z.enum(['frontend', 'extension', 'telegram']).optional().default('frontend'),
   channel: z.string().min(1).max(100).optional().default('dashboard_chat'),
   commandText: z.string().min(1).max(500).optional(),
+  provider: z.string().min(1).max(100).optional(),
+  model: z.string().min(1).max(200).optional(),
+  apiKey: z.string().min(1).max(500).optional(),
+  baseUrl: z.string().url().optional(),
 });
 
 // Get automation status
@@ -49,7 +53,7 @@ router.get('/status', authenticate, async (req: AuthRequest, res: Response, next
 // Start automation
 router.post('/start', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { count, source, channel, commandText } = startAutomationSchema.parse(req.body);
+    const { count, source, channel, commandText, provider, model, apiKey, baseUrl } = startAutomationSchema.parse(req.body);
 
     const { data: activeCommand } = await supabase
       .from('agent_sessions')
@@ -65,10 +69,18 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
 
     const { data: preferences } = await supabase.from('job_preferences').select('*').eq('user_id', req.userId).single();
 
+    const configuredProvider = provider || 'gemini';
+    const configuredModel = model || process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+    const configuredApiKey = apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+
     const searchQuery = JSON.stringify({
       count,
       roles: preferences?.roles || [],
-      locations: preferences?.locations || []
+      locations: preferences?.locations || [],
+      provider: configuredProvider,
+      model: configuredModel,
+      apiKey: configuredApiKey,
+      baseUrl: baseUrl || undefined,
     });
 
     const { data: command, error } = await supabase.from('agent_sessions').insert({

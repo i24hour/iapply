@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useChatStore } from '@/stores/chat-store';
 import { useDashboardStore } from '@/stores/dashboard-store';
-import { automationApi, applicationsApi, profileApi, preferencesApi } from '@/lib/api';
+import { api, automationApi, applicationsApi, extensionApi, profileApi, preferencesApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
   Send,
@@ -22,6 +22,12 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { ChatMessage, Application } from '@/lib/types';
+
+type RecordingFrame = {
+  id: string;
+  url: string;
+  createdAt: string;
+};
 
 type CommandCategory = 'extension' | 'local' | 'info';
 type ApplyMode = 'easy' | 'apply';
@@ -61,6 +67,14 @@ function parseCommand(text: string): ParsedCommand | null {
     };
   }
 
+  if (/\b(start|begin|enable|turn on)\s+(recording|screen\s*record)/.test(lower)) {
+    return { action: 'start_recording', category: 'extension' };
+  }
+
+  if (/\b(stop|disable|turn off)\s+(recording|screen\s*record)/.test(lower)) {
+    return { action: 'stop_recording', category: 'extension' };
+  }
+
   // Pause automation → extension
   if (/\bpause\b/.test(lower)) {
     return { action: 'pause', category: 'extension' };
@@ -74,6 +88,14 @@ function parseCommand(text: string): ParsedCommand | null {
   // Resume automation → extension
   if (/\bresume\b/.test(lower) && !/\bresume\s+(page|upload|file|pdf|doc)/i.test(lower)) {
     return { action: 'start', count: 10, category: 'extension' };
+  }
+
+  if (/\b(screenshot|snap|capture)\b/.test(lower)) {
+    return { action: 'screenshot', category: 'extension' };
+  }
+
+  if (/\b(logs?|recording|screen\s*record|live\s*feed|stream)\b/.test(lower)) {
+    return { action: 'live_feed', category: 'info' };
   }
 
   // --- Local queries ---
@@ -141,6 +163,13 @@ function formatApplicationsResponse(apps: Application[]): string {
   return result;
 }
 
+function normalizeMediaUrl(url: string): string {
+  if (!url) return '';
+  if (/^https?:\/\//i.test(url)) return url;
+  const base = (api.defaults.baseURL || '').replace(/\/$/, '');
+  return `${base}${url.startsWith('/') ? url : `/${url}`}`;
+}
+
 const quickActions = [
   { label: 'Easy Apply 5 jobs', icon: Zap, command: 'easy apply 5 jobs' },
   { label: 'Apply 5 jobs', icon: Play, command: 'apply 5 jobs based on my profile' },
@@ -158,12 +187,84 @@ export function ChatBot() {
   const [input, setInput] = useState('');
   const [selectedApplyMode, setSelectedApplyMode] = useState<ApplyMode>('easy');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [recordingFrames, setRecordingFrames] = useState<RecordingFrame[]>([]);
+  const [isRecordingActive, setIsRecordingActive] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const lastLogRef = useRef('');
+  const lastScreenshotRef = useRef('');
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    let isUnmounted = false;
+
+    const pullLiveFeed = async () => {
+      try {
+        const res = await extensionApi.live(25, 3, 12);
+        const payload = res.data || {};
+        const logs = Array.isArray(payload.logs) ? payload.logs : [];
+        const screenshots = Array.isArray(payload.screenshots) ? payload.screenshots : [];
+        const recordings = Array.isArray(payload.recordings) ? payload.recordings : [];
+        const recordingActive = Boolean(payload.recordingActive);
+
+        if (!isUnmounted) {
+          setIsRecordingActive(recordingActive);
+          setRecordingFrames(
+            recordings
+              .filter((item: any) => item?.url)
+              .map((item: any) => ({
+                id: item.id,
+                url: normalizeMediaUrl(item.url),
+                createdAt: item.createdAt,
+              }))
+          );
+        }
+
+        if (!isUnmounted && logs.length) {
+          const unseenLogs = logs.filter((log: any) => {
+            const key = `${log.timestamp}|${log.message}|${log.isError ? '1' : '0'}`;
+            return key > lastLogRef.current;
+          });
+
+          if (unseenLogs.length) {
+            const latest = unseenLogs.slice(-4);
+            latest.forEach((log: any) => {
+              const key = `${log.timestamp}|${log.message}|${log.isError ? '1' : '0'}`;
+              lastLogRef.current = key;
+              addMessage({
+                role: 'bot',
+                content: `${log.isError ? '❌' : '🧾'} **Extension Log**: ${log.message}`,
+              });
+            });
+          }
+        }
+
+        if (!isUnmounted && screenshots.length) {
+          const latestShot = screenshots[0];
+          if (latestShot?.url && latestShot.url !== lastScreenshotRef.current) {
+            lastScreenshotRef.current = latestShot.url;
+            addMessage({
+              role: 'bot',
+              content: `🎥 **Latest Screen Capture**\n${normalizeMediaUrl(latestShot.url)}`,
+            });
+          }
+        }
+      } catch {
+        // Silent when extension/backend feed is temporarily unavailable.
+      }
+    };
+
+    const interval = setInterval(pullLiveFeed, 4000);
+    pullLiveFeed();
+
+    return () => {
+      isUnmounted = true;
+      clearInterval(interval);
+    };
+  }, [addMessage]);
 
   const handleCommand = async (command: ParsedCommand, rawCommandText: string) => {
     setIsProcessing(true);
@@ -197,6 +298,7 @@ export function ChatBot() {
             source: 'frontend',
             channel: 'dashboard_chat',
             commandText: rawCommandText,
+            provider: 'gemini',
           });
           setAutomationStatus({ ...automationStatus, isRunning: true, currentAction: 'scrape_jobs' });
 
@@ -270,6 +372,66 @@ export function ChatBot() {
             setAutomationStatus(s);
           } catch {
             addMessage({ role: 'bot', content: '❌ Failed to fetch status. Please try again.' });
+          }
+          break;
+        }
+
+        case 'live_feed': {
+          addMessage({
+            role: 'bot',
+            content:
+              '🛰️ Live feed is active in this chat. I will keep posting extension logs and the latest capture automatically while automation runs.',
+          });
+          break;
+        }
+
+        case 'screenshot': {
+          try {
+            await extensionApi.requestScreenshot();
+            addMessage({
+              role: 'bot',
+              content:
+                '📸 Screenshot requested from the extension. I will post the latest capture here as soon as it arrives.',
+            });
+          } catch {
+            addMessage({
+              role: 'bot',
+              content: '❌ Could not request screenshot right now. Ensure extension is logged in and running.',
+            });
+          }
+          break;
+        }
+
+        case 'start_recording': {
+          try {
+            await extensionApi.startRecording();
+            addMessage({
+              role: 'bot',
+              content:
+                '⏺️ Recording started. I will keep adding fresh frames to the Live Recording Timeline in this chat.',
+            });
+          } catch {
+            addMessage({
+              role: 'bot',
+              content: '❌ Could not start recording. Ensure extension is active and authenticated.',
+            });
+          }
+          break;
+        }
+
+        case 'stop_recording': {
+          try {
+            await extensionApi.stopRecording();
+            addMessage({
+              role: 'bot',
+              content:
+                '⏹️ Recording stopped. Existing timeline frames are still visible in chat history.',
+            });
+          } catch {
+            addMessage({
+              role: 'bot',
+              content: '❌ Could not stop recording right now. Please try again.',
+            });
           }
           break;
         }
@@ -363,7 +525,7 @@ export function ChatBot() {
           addMessage({
             role: 'bot',
             content:
-              '🤖 **Here\'s what I can do:**\n\n**Job Automation** _(sent to extension)_\n• **"Easy apply 5 jobs"** — Start Easy Apply mode (no iApply resume required)\n• **"Apply 5 jobs"** — Start apply mode (requires uploaded resume)\n• **"Apply 10 jobs based on my profile"** — Same, explicit\n• **"Pause"** — Pause current automation\n• **"Stop"** — Stop and reset\n• **"Resume"** — Resume paused automation\n\n**Info & Status**\n• **"Status"** — Check automation progress\n• **"Show applications"** — See recent applications\n• **"Stats"** — View your numbers\n\n**Profile & Settings**\n• **"Show my profile"** — View profile info\n• **"Show resume"** — View resume details\n• **"Preferences"** — View job preferences',
+              '🤖 **Here\'s what I can do:**\n\n**Job Automation** _(sent to extension)_\n• **"Easy apply 5 jobs"** — Start Easy Apply mode (no iApply resume required)\n• **"Apply 5 jobs"** — Start apply mode (requires uploaded resume)\n• **"Apply 10 jobs based on my profile"** — Same, explicit\n• **"Pause"** — Pause current automation\n• **"Stop"** — Stop and reset\n• **"Resume"** — Resume paused automation\n\n**Live Monitoring**\n• **"logs"** or **"live feed"** — Confirm live stream mode\n• **"screenshot"** — Request an instant capture from extension\n• **"start recording"** — Force recording ON\n• **"stop recording"** — Force recording OFF\n• Extension logs and latest captures are auto-posted here\n\n**Info & Status**\n• **"Status"** — Check automation progress\n• **"Show applications"** — See recent applications\n• **"Stats"** — View your numbers\n\n**Profile & Settings**\n• **"Show my profile"** — View profile info\n• **"Show resume"** — View resume details\n• **"Preferences"** — View job preferences',
           });
           break;
         }
@@ -444,6 +606,22 @@ export function ChatBot() {
             )}
           </p>
         </div>
+        <span
+          className={cn(
+            'hidden sm:inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium border',
+            isRecordingActive
+              ? 'bg-rose-50 text-rose-700 border-rose-200'
+              : 'bg-gray-50 text-gray-600 border-gray-200'
+          )}
+        >
+          <span
+            className={cn(
+              'inline-block h-2 w-2 rounded-full',
+              isRecordingActive ? 'bg-rose-500 animate-pulse' : 'bg-gray-400'
+            )}
+          />
+          {isRecordingActive ? 'Recording On' : 'Recording Off'}
+        </span>
         {automationStatus.isRunning && (
           <button
             onClick={() => handleSend('stop')}
@@ -457,6 +635,42 @@ export function ChatBot() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-4">
+        {recordingFrames.length > 0 && (
+          <div className="rounded-xl border border-primary-100 bg-primary-50 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">
+                Live Recording Timeline
+              </p>
+              <p className="text-xs text-primary-600">{recordingFrames.length} frames</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {recordingFrames.slice(0, 6).map((frame) => (
+                <a
+                  key={frame.id}
+                  href={frame.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group overflow-hidden rounded-lg border border-primary-200 bg-white"
+                >
+                  <img
+                    src={frame.url}
+                    alt="Automation frame"
+                    className="h-20 w-full object-cover transition group-hover:scale-105"
+                    loading="lazy"
+                  />
+                  <div className="px-2 py-1 text-[10px] text-gray-500">
+                    {new Date(frame.createdAt).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      second: '2-digit',
+                    })}
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
@@ -502,6 +716,8 @@ export function ChatBot() {
           {[
             { label: '📊 Status', cmd: 'status' },
             { label: '⏸ Pause', cmd: 'pause' },
+            { label: '⏺ Record', cmd: 'start recording' },
+            { label: '⏹ Stop Rec', cmd: 'stop recording' },
             { label: '🛑 Stop', cmd: 'stop' },
           ].map((chip) => (
             <button
@@ -605,15 +821,33 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
 /** Simple markdown: **bold** support */
 function renderMarkdown(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
+  const boldParts = text.split(/(\*\*[^*]+\*\*)/g);
+
+  return boldParts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) {
       return (
-        <strong key={i} className="font-semibold">
+        <strong key={`b-${i}`} className="font-semibold">
           {part.slice(2, -2)}
         </strong>
       );
     }
-    return part;
+
+    const urlParts = part.split(/(https?:\/\/[^\s]+)/g);
+    return urlParts.map((chunk, j) => {
+      if (/^https?:\/\//.test(chunk)) {
+        return (
+          <a
+            key={`u-${i}-${j}`}
+            href={chunk}
+            target="_blank"
+            rel="noreferrer"
+            className="underline break-all"
+          >
+            {chunk}
+          </a>
+        );
+      }
+      return <span key={`t-${i}-${j}`}>{chunk}</span>;
+    });
   });
 }

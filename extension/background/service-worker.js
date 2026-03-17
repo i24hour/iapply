@@ -4,8 +4,10 @@ const API_URL = 'https://iapply-telegram-bot.onrender.com';
 const TELEGRAM_POLL_INTERVAL = 5000;
 const MAX_DEBUG_LOGS = 250;
 const MAX_LOG_ENTRIES = 300;
+const RECORDING_INTERVAL_MS = 15000;
 
 let telegramPollTimer = null;
+let recordingTimer = null;
 let postAgentRunning = false;
 let postAgentTabId = null;
 let postAgentJobTitle = '';
@@ -78,6 +80,75 @@ async function emitAgentLog(message, isError = false) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function captureAndUploadFrame(trigger = 'interval') {
+  try {
+    const linkedinTabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
+    const tab = linkedinTabs.find((t) => t.active) || linkedinTabs[0];
+    if (!tab) return;
+
+    const dataUrl = await new Promise((resolve) => {
+      chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 35 }, (image) => {
+        if (chrome.runtime.lastError || !image) {
+          resolve(null);
+          return;
+        }
+        resolve(image);
+      });
+    });
+
+    if (!dataUrl) {
+      if (trigger !== 'interval') {
+        emitAgentLog('Could not capture frame from visible LinkedIn tab.', true).catch(() => {});
+      }
+      return;
+    }
+
+    const headers = await getAuthHeaders();
+    if (!headers.Authorization) return;
+
+    await fetch(`${API_URL}/agent/capture`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ screenshotBase64: dataUrl }),
+    });
+  } catch {
+    // Ignore transient capture/upload failures.
+  }
+}
+
+async function reportRecordingStatus(active) {
+  try {
+    const headers = await getAuthHeaders();
+    if (!headers.Authorization) return;
+    await fetch(`${API_URL}/agent/recording-status`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ active: Boolean(active) }),
+    });
+  } catch {
+    // Ignore status reporting errors.
+  }
+}
+
+function stopLiveRecording() {
+  if (recordingTimer) {
+    clearInterval(recordingTimer);
+    recordingTimer = null;
+    reportRecordingStatus(false).catch(() => {});
+    emitAgentLog('Live recording stopped.').catch(() => {});
+  }
+}
+
+function startLiveRecording() {
+  if (recordingTimer) return;
+  reportRecordingStatus(true).catch(() => {});
+  emitAgentLog('Live recording started.').catch(() => {});
+  recordingTimer = setInterval(() => {
+    captureAndUploadFrame('interval').catch(() => {});
+  }, RECORDING_INTERVAL_MS);
+  captureAndUploadFrame('start').catch(() => {});
 }
 
 // Score a resume against a job-title search query using keyword overlap.
@@ -212,6 +283,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         channel: message.config?.channel || 'extension_popup',
         selectedResume: selectedResume || null,
       });
+      startLiveRecording();
       sendResponse({ success: true, taskId });
     })().catch((error) => {
       sendResponse({ success: false, error: error.message });
@@ -220,7 +292,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'stop_agent') {
     appendAgentLog('Agent stop requested.');
     stopAgent();
+    stopLiveRecording();
     sendResponse({ success: true });
+  } else if (message.action === 'start_recording') {
+    startLiveRecording();
+    sendResponse({ success: true });
+    return true;
+  } else if (message.action === 'stop_recording') {
+    stopLiveRecording();
+    sendResponse({ success: true });
+    return true;
   } else if (message.action === 'get_agent_status') {
     sendResponse(getAgentStatus());
     return true;
@@ -250,6 +331,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'stop_post_agent') {
     stopPostAgent().then(() => sendResponse({ success: true }));
     return true;
+  } else if (message.action === 'agent_stopped' || message.action === 'agent_finished' || message.action === 'agent_error') {
+    stopLiveRecording();
+    return false;
   } else if (message.action === 'get_post_agent_status') {
     sendResponse({
       running: postAgentRunning,
@@ -345,10 +429,10 @@ async function pollFrontendCommands() {
     const searchQuery = [roles[0] || 'Software Engineer', locations[0] || ''].filter(Boolean).join(' ');
 
     const config = {
-      provider: settings.llm_provider || 'gemini',
-      apiKey: settings.llm_api_key || '',
-      model: settings.llm_model || '',
-      baseUrl: settings.llm_base_url || '',
+      provider: cmd.payload?.provider || settings.llm_provider || 'gemini',
+      apiKey: cmd.payload?.apiKey || settings.llm_api_key || '',
+      model: cmd.payload?.model || settings.llm_model || 'gemini-1.5-flash',
+      baseUrl: cmd.payload?.baseUrl || settings.llm_base_url || '',
       searchQuery,
       taskId: cmd.payload?.taskId || null,
       source: 'frontend',
@@ -362,6 +446,7 @@ async function pollFrontendCommands() {
     }
 
     startAgent(config);
+    startLiveRecording();
   } catch {
     // Backend not reachable.
   }
@@ -402,6 +487,7 @@ async function pollTelegramBridge() {
       }
 
       startAgent(config);
+      startLiveRecording();
 
       fetch(`${API_URL}/agent/status`, {
         method: 'POST',
@@ -410,6 +496,7 @@ async function pollTelegramBridge() {
       }).catch(() => {});
     } else if (cmd.type === 'stop_agent') {
       stopAgent();
+      stopLiveRecording();
 
       fetch(`${API_URL}/agent/status`, {
         method: 'POST',
@@ -427,6 +514,8 @@ async function pollTelegramBridge() {
           await chrome.windows.update(tabToCapture.windowId, { focused: true });
           await chrome.tabs.update(tabToCapture.id, { active: true });
           await sleep(800);
+
+          captureAndUploadFrame('manual').catch(() => {});
 
           chrome.tabs.captureVisibleTab(tabToCapture.windowId, { format: 'jpeg', quality: 40 }, async (dataUrl) => {
             if (chrome.runtime.lastError || !dataUrl) {
@@ -450,6 +539,10 @@ async function pollTelegramBridge() {
       } catch (error) {
         forwardLogToBackend('Screenshot error: ' + error.message, true);
       }
+    } else if (cmd.type === 'start_recording') {
+      startLiveRecording();
+    } else if (cmd.type === 'stop_recording') {
+      stopLiveRecording();
     }
 
     fetch(`${API_URL}/agent/complete/${cmd.id}`, {
