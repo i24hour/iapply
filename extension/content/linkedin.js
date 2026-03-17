@@ -1038,6 +1038,74 @@ function isPrimaryApplyActionButton(el) {
 // HARDCODED RESUME SELECTION (deterministic)
 // ==========================================
 
+function hasResumeRequirementError(modal = getEasyApplyModal()) {
+  if (!modal) return false;
+  return /resume is required/i.test(modal.innerText || '');
+}
+
+function hasActiveResumeCardState(card) {
+  if (!card) return false;
+
+  const classText = `${card.className || ''} ${card.getAttribute('data-test-text-selectable-option__container') || ''}`.toLowerCase();
+  if (/(selected|active|checked|current)/.test(classText)) {
+    return true;
+  }
+
+  if (
+    card.getAttribute('aria-selected') === 'true' ||
+    card.getAttribute('aria-checked') === 'true' ||
+    card.getAttribute('data-test-selected') === 'true'
+  ) {
+    return true;
+  }
+
+  const style = window.getComputedStyle(card);
+  const borderColor = (style.borderColor || '').toLowerCase();
+  const boxShadow = (style.boxShadow || '').toLowerCase();
+
+  return (
+    borderColor.includes('rgb(10') ||
+    borderColor.includes('rgb(37') ||
+    borderColor.includes('#0a') ||
+    borderColor.includes('#25') ||
+    boxShadow !== 'none'
+  );
+}
+
+function isResumeCardCommitted(card, modal = getEasyApplyModal()) {
+  if (!card) return false;
+  const radio = card.querySelector('input[type="radio"], input[type="checkbox"]');
+  const radioChecked = Boolean(radio && radio.checked);
+  if (!radioChecked) return false;
+
+  return hasActiveResumeCardState(card) || !hasResumeRequirementError(modal);
+}
+
+async function commitResumeSelection(card) {
+  const modal = getEasyApplyModal();
+  if (!modal || !card) return false;
+
+  const radio = card.querySelector('input[type="radio"], input[type="checkbox"]');
+  const attempts = [card, radio, card].filter(Boolean);
+
+  for (const target of attempts) {
+    await humanClick(target);
+    if (radio) {
+      radio.checked = true;
+      radio.dispatchEvent(new Event('input', { bubbles: true }));
+      radio.dispatchEvent(new Event('change', { bubbles: true }));
+      radio.dispatchEvent(new Event('click', { bubbles: true }));
+    }
+    await sleep(500);
+
+    if (isResumeCardCommitted(card, modal)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 async function autoSelectBestResume(resumeKeyword, titleTokens) {
   const modal = getEasyApplyModal();
   if (!modal) return { changed: false, reason: 'no modal' };
@@ -1085,7 +1153,7 @@ async function autoSelectBestResume(resumeKeyword, titleTokens) {
     const nameLower = name.toLowerCase();
     const radio = card.querySelector('input[type="radio"], input[type="checkbox"]');
 
-    if (radio && radio.checked) {
+    if (isResumeCardCommitted(card, modal)) {
       currentlySelectedCard = { card, name, radio };
     }
 
@@ -1118,10 +1186,13 @@ async function autoSelectBestResume(resumeKeyword, titleTokens) {
     return { changed: false, reason: 'already correct' };
   }
 
-  const clickTarget = bestCard.radio || bestCard.card;
   postAgentLog(`Selecting resume "${bestCard.name}" (score: ${bestScore}) for keywords [${keywords.join(', ')}]`);
-  await humanClick(clickTarget);
-  await sleep(500);
+  const committed = await commitResumeSelection(bestCard.card);
+  if (!committed) {
+    postAgentLog(`Resume "${bestCard.name}" still does not look committed after selection attempt.`, true);
+    return { changed: false, reason: 'selection did not commit', selectedName: bestCard.name };
+  }
+  postAgentLog(`Resume "${bestCard.name}" is now committed for this application step.`);
 
   return { changed: true, selectedName: bestCard.name };
 }
@@ -1181,9 +1252,9 @@ function buildDOMSnapshot() {
     const resumeDetails = resumeCards.map(card => {
       const nameEl = card.querySelector('h3, .ui-attachment__title, .jobs-document-upload-redesign-card__file-name, [data-test-text-selectable-option__text]');
       const name = nameEl?.textContent?.trim() || 'Unknown';
-      const radio = card.querySelector('input[type="radio"], input[type="checkbox"]');
-      const selected = radio ? radio.checked : false;
-      return `- ${name} ${selected ? '[SELECTED]' : '[NOT SELECTED]'}`;
+      const selected = isResumeCardCommitted(card, modal);
+      const checkedOnly = !selected && Boolean(card.querySelector('input[type="radio"]:checked, input[type="checkbox"]:checked'));
+      return `- ${name} ${selected ? '[SELECTED]' : checkedOnly ? '[CHECKED_ONLY_NOT_COMMITTED]' : '[NOT SELECTED]'}`;
     }).join('\n');
 
     const showMoreBtn = modal ? Array.from(modal.querySelectorAll('button')).find(btn => {
