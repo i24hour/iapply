@@ -3,6 +3,7 @@ import { startAgent, stopAgent, getAgentStatus } from './agent-core.js';
 const API_URL = 'https://iapply-telegram-bot.onrender.com';
 const TELEGRAM_POLL_INTERVAL = 5000;
 const MAX_DEBUG_LOGS = 250;
+const MAX_LOG_ENTRIES = 300;
 
 let telegramPollTimer = null;
 let postAgentRunning = false;
@@ -10,6 +11,14 @@ let postAgentTabId = null;
 let postAgentJobTitle = '';
 let postAgentKeywords = '';
 let debugLogs = [];
+let agentLogs = [];
+
+function appendAgentLog(message, isError = false) {
+  agentLogs.push({ message, isError, timestamp: Date.now() });
+  if (agentLogs.length > MAX_LOG_ENTRIES) {
+    agentLogs = agentLogs.slice(-MAX_LOG_ENTRIES);
+  }
+}
 
 async function getAuthHeaders() {
   const result = await chrome.storage.local.get(['supabase_token']);
@@ -171,6 +180,8 @@ async function sendMessageWithRetry(tabId, message, retries = 5, delayMs = 1200)
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'start_agent') {
+    agentLogs = [];
+    appendAgentLog('Agent start requested.');
     (async () => {
       let taskId = message.config?.taskId || null;
 
@@ -207,6 +218,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   } else if (message.action === 'stop_agent') {
+    appendAgentLog('Agent stop requested.');
     stopAgent();
     sendResponse({ success: true });
   } else if (message.action === 'get_agent_status') {
@@ -218,7 +230,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       status: getAgentStatus(),
     });
     return true;
+  } else if (message.action === 'get_agent_logs') {
+    sendResponse({ success: true, logs: agentLogs });
+    return true;
   } else if (message.action === 'agent_log') {
+    appendAgentLog(message.message, message.isError);
     emitAgentLog(message.message, message.isError).catch(() => {});
   } else if (message.action === 'set_token') {
     chrome.storage.local.set({ supabase_token: message.token }, () => {
