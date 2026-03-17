@@ -939,7 +939,9 @@ function listModalValidationIssues() {
     // Ignore hidden helper fields and search fields in dropdown widgets.
     if (type === 'hidden' || field.getAttribute('aria-hidden') === 'true') continue;
 
-    if ((required && !value) || invalid) {
+    const missingRequired = required && !value && !isDropdownLikeElement(field);
+
+    if (missingRequired || invalid) {
       issues.push({
         field,
         label,
@@ -1246,9 +1248,17 @@ async function executeAgentAction(decision) {
           postAgentLog(`Auto-fixed ${fixResult.fixed} field(s) before trying the progress button.`);
         }
         if (fixResult.remaining > 0) {
-          postAgentLog(`Skipping progress button because ${fixResult.remaining} validation issue(s) still remain visible.`, true);
+          const remainingIssues = listModalValidationIssues()
+            .slice(0, 5)
+            .map((issue) => `${issue.label || 'Unknown field'}: ${issue.errorText || issue.value || 'still unresolved'}`)
+            .join(' | ');
+          postAgentLog(
+            `Skipping progress button because ${fixResult.remaining} validation issue(s) still remain visible.${remainingIssues ? ` Remaining: ${remainingIssues}` : ''}`,
+            true
+          );
           return;
         }
+        postAgentLog(`Trying progress button "${(el.innerText || el.textContent || el.getAttribute('aria-label') || 'continue').trim()}".`);
       }
       await humanClick(el);
     } else if (action === 'type') {

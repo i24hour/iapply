@@ -403,103 +403,73 @@ function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
   const elements = snapshot.elements || [];
   const progressButton = elements.find(isPrimaryProgressButton);
 
-  // Skip the element we are already stuck on — retrying it won't help.
-  const unresolvedField = elements.find((element) => {
+  // Priority 1: Click the progress button to force LinkedIn validation.
+  // Pre-filled contact info fields (email, phone, country code) are often
+  // marked invalid in the DOM before first submit. Clicking Next lets
+  // LinkedIn re-validate and accept them, which is more reliable than
+  // guessing what value to fill.
+  if (progressButton) {
+    const repeatedIsProgress = repeated && isPrimaryProgressButton(
+      elements.find((e) => e.id === repeated.elementId)
+    );
+    if (!repeatedIsProgress) {
+      return {
+        action: 'click',
+        elementId: progressButton.id,
+        reasoning: 'Recovery mode: clicking progress button to trigger LinkedIn validation and move forward.'
+      };
+    }
+  }
+
+  // Priority 2: Clicking the progress button IS the stuck action, so
+  // there is a real validation blocker. Fix the first truly empty field.
+  const emptyRequiredField = elements.find((element) => {
     if (isPrimaryProgressButton(element)) return false;
-    if (repeated && element.id === repeated.elementId) return false;
-    return element.invalid || (element.required && !hasMeaningfulFieldValue(element));
+    // Only fix fields that are genuinely empty — never overwrite existing values.
+    if (element.invalid && hasMeaningfulFieldValue(element)) return false;
+    return (element.required && !hasMeaningfulFieldValue(element)) ||
+           (element.invalid && !hasMeaningfulFieldValue(element));
   });
 
-  if (unresolvedField) {
-    const label = unresolvedField.label || unresolvedField.text || unresolvedField.id;
-    const reason = unresolvedField.errorText || (unresolvedField.required ? 'required value missing' : 'invalid value');
+  if (emptyRequiredField) {
+    const label = emptyRequiredField.label || emptyRequiredField.text || emptyRequiredField.id;
+    const reason = emptyRequiredField.errorText || 'required value missing';
 
-    // If the field already has a value but LinkedIn still marks it invalid,
-    // don't overwrite it — force forward and let LinkedIn validate on submit.
-    if (unresolvedField.invalid && hasMeaningfulFieldValue(unresolvedField) && progressButton) {
-      return {
-        action: 'click',
-        elementId: progressButton.id,
-        reasoning: `Recovery mode: "${label}" is marked invalid but already has a value. Forcing forward to avoid overwriting correct data.`
-      };
-    }
-
-    if (isDropdownSnapshotElement(unresolvedField)) {
+    if (isDropdownSnapshotElement(emptyRequiredField)) {
       return {
         action: 'select_option',
-        elementId: unresolvedField.id,
-        value: pickRecoveryValue(unresolvedField),
-        reasoning: `Recovery mode: unresolved invalid dropdown detected for "${label}" (${reason}). Fixing it before clicking the progress button.`
+        elementId: emptyRequiredField.id,
+        value: pickRecoveryValue(emptyRequiredField),
+        reasoning: `Recovery mode: empty required dropdown "${label}" (${reason}). Selecting a value.`
       };
     }
 
-    if (unresolvedField.tag === 'input' || unresolvedField.tag === 'textarea') {
+    if (emptyRequiredField.tag === 'input' || emptyRequiredField.tag === 'textarea') {
       return {
-        action: unresolvedField.value ? 'clear_and_type' : 'type',
-        elementId: unresolvedField.id,
-        value: pickRecoveryValue(unresolvedField),
-        reasoning: `Recovery mode: unresolved invalid field detected for "${label}" (${reason}). Refilling it before clicking the progress button.`
+        action: emptyRequiredField.value ? 'clear_and_type' : 'type',
+        elementId: emptyRequiredField.id,
+        value: pickRecoveryValue(emptyRequiredField),
+        reasoning: `Recovery mode: empty required field "${label}" (${reason}). Filling it.`
       };
     }
 
     return {
       action: 'click',
-      elementId: unresolvedField.id,
-      reasoning: `Recovery mode: unresolved required control detected for "${label}" (${reason}). Focusing it before trying to continue.`
+      elementId: emptyRequiredField.id,
+      reasoning: `Recovery mode: interacting with unresolved control "${label}" (${reason}).`
     };
   }
 
-  if (repeated?.action === 'select_option') {
-    const target = elements.find((e) => e.id === repeated.elementId);
-
-    if (target && hasMeaningfulFieldValue(target) && !target.invalid && progressButton) {
-      return {
-        action: 'click',
-        elementId: progressButton.id,
-        reasoning: 'Recovery mode: dropdown already has a value, moving forward by clicking the primary progress button.'
-      };
-    }
-
-    const anotherRequiredSelect = elements.find((e) =>
-      e.id !== repeated.elementId &&
-      (e.tag === 'select' || e.role === 'combobox') &&
-      (e.invalid || (e.required && (!e.value || String(e.value).trim() === '')))
-    );
-
-    if (anotherRequiredSelect) {
-      return {
-        action: 'select_option',
-        elementId: anotherRequiredSelect.id,
-        value: 'Yes',
-        reasoning: 'Recovery mode: switching to another required/invalid dropdown instead of repeating the same select action.'
-      };
-    }
-
-    if (progressButton) {
-      return {
-        action: 'click',
-        elementId: progressButton.id,
-        reasoning: 'Recovery mode: forcing progress because repeated dropdown selection did not change the page.'
-      };
-    }
-  }
-
-  if ((repeated?.action === 'type' || repeated?.action === 'clear_and_type') && progressButton) {
-    return {
-      action: 'click',
-      elementId: progressButton.id,
-      reasoning: 'Recovery mode: stopping repeated typing and attempting to continue to the next step.'
-    };
-  }
-
+  // Priority 3: No empty fields found but still stuck — force the progress button.
   if (progressButton) {
     return {
       action: 'click',
       elementId: progressButton.id,
-      reasoning: 'Recovery mode: selecting the primary progress button to break the loop.'
+      reasoning: 'Recovery mode: all fields appear filled. Forcing progress button.'
     };
   }
 
+  // Priority 4: No progress button at all — scroll.
   return {
     action: 'scroll',
     reasoning: 'Recovery mode: scrolling to reveal new elements and break repetitive behavior.'
