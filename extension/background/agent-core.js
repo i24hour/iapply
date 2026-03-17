@@ -211,6 +211,24 @@ async function runAgentLoop() {
         ?.trim();
       if (validationBlock) {
         broadcastLog(`Visible validation issues:\n${validationBlock}`, true);
+        broadcastLog('Attempting deterministic validation recovery before asking the LLM...', true);
+        const fixResult = await triggerValidationRecovery();
+        if (fixResult) {
+          const details = Array.isArray(fixResult.details) && fixResult.details.length
+            ? ` ${fixResult.details.join(' | ')}`
+            : '';
+          broadcastLog(
+            `Validation recovery applied ${fixResult.fixed || 0} fix(es); ${fixResult.remaining || 0} issue(s) remain.${details}`,
+            (fixResult.remaining || 0) > 0,
+          );
+          const refreshed = await getDOMSnapshotFromActiveTab();
+          if (refreshed) {
+            snapshot = refreshed;
+            broadcastLog(`Snapshot refreshed after validation recovery: ${snapshot.url} | ${snapshot.elements.length} elements`);
+          }
+        } else {
+          broadcastLog('Validation recovery could not run on the LinkedIn tab.', true);
+        }
       }
     }
 
@@ -710,6 +728,13 @@ async function getDOMSnapshotFromActiveTab() {
   const tab = tabs[0];
   const response = await chrome.tabs.sendMessage(tab.id, { action: 'build_snapshot' });
   return response.snapshot;
+}
+
+async function triggerValidationRecovery() {
+  const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
+  if (!tabs.length) return null;
+
+  return chrome.tabs.sendMessage(tabs[0].id, { action: 'auto_fix_validation' });
 }
 
 async function executeActionInActiveTab(decision) {

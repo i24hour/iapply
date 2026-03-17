@@ -1442,6 +1442,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'auto_fix_validation') {
+    autoFixModalValidationIssues().then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
+
   if (message.action === 'execute_decision') {
     executeAgentAction(message.decision).then(() => {
       sendResponse({ success: true });
