@@ -4,7 +4,7 @@
 export interface AgentCommand {
   id: string;
   userId: string;
-  type: 'start_agent' | 'stop_agent' | 'request_screenshot';
+  type: 'start_agent' | 'stop_agent' | 'request_screenshot' | 'start_recording' | 'stop_recording';
   payload: {
     searchQuery?: string;
     userGoal?: string;
@@ -28,6 +28,7 @@ type AgentState = {
   commands: AgentCommand[];
   logs: AgentLog[];
   status: 'idle' | 'running' | 'error';
+  recordingActive: boolean;
 };
 
 const userState = new Map<string, AgentState>();
@@ -35,7 +36,7 @@ const userState = new Map<string, AgentState>();
 function getState(userId: string): AgentState {
   let state = userState.get(userId);
   if (!state) {
-    state = { commands: [], logs: [], status: 'idle' };
+    state = { commands: [], logs: [], status: 'idle', recordingActive: false };
     userState.set(userId, state);
   }
   return state;
@@ -107,4 +108,12 @@ export function setAgentStatus(userId: string, status: 'idle' | 'running' | 'err
 
 export function getAgentStatus(userId: string) {
   return getState(userId).status;
+}
+
+export function setRecordingStatus(userId: string, active: boolean) {
+  getState(userId).recordingActive = active;
+}
+
+export function getRecordingStatus(userId: string) {
+  return getState(userId).recordingActive;
 }
