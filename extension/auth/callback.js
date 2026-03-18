@@ -5,7 +5,7 @@ const closeBtn = document.getElementById('closeBtn');
 
 function setStatus(message, variant = '') {
   statusEl.textContent = message;
-  statusEl.className = `status${variant ? ` ${variant}` : ''}`;
+  statusEl.className = variant ? `status ${variant}` : 'status';
 }
 
 async function verifyAndStoreToken(token, refreshToken) {

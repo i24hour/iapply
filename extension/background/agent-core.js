@@ -553,97 +553,117 @@ async function callLLM(snapshot, stuckHint = '') {
     ? `\nRESUME PREFERENCE: The user wants to use their "${resumeKeyword}" resume — when LinkedIn shows a resume list, pick the file whose name contains "${resumeKeyword}".`
     : '';
 
-  const prompt = `You are an autonomous browser agent. You control a Chrome browser on LinkedIn.
+  const pageTextLimit = settings.mode === 'post_outreach' ? 3000 : 1500;
+  const pageTextPreview = snapshot.rawText.substring(0, pageTextLimit);
+  const interactiveElementsText = snapshot.elements
+    .map((e) => `[${e.id}] <${e.tag}${e.type ? ' type=' + e.type : ''}${e.role ? ' role=' + e.role : ''}> "${e.text}"${e.label ? ' label="' + e.label + '"' : ''}${e.value ? ' value="' + e.value + '"' : ''}${e.checked === true ? ' checked=true' : e.checked === false ? ' checked=false' : ''}${e.required ? ' required=true' : ''}${e.invalid ? ' invalid=true' : ''}${e.errorText ? ' error="' + e.errorText + '"' : ''}`)
+    .join('\n');
 
-YOUR GOAL: ${currentGoal}${resumeContextLine}
+  const outreachRules = [
+    '⚠️  MODE: POST OUTREACH — Scroll the LinkedIn feed, read post descriptions, and engage only with posts that match the target keywords.',
+    '',
+    `TARGET TITLE (primary): "${settings.postTitle || ''}"`,
+    `TARGET KEYWORDS (secondary): "${settings.relatedKeywords || ''}"`,
+    '',
+    'POST OUTREACH RULES (STRICTLY FOLLOW):',
+    'PO-1. NEVER navigate to any URL containing "/jobs/" — the LinkedIn Jobs section is completely OFF-LIMITS.',
+    'PO-2. NEVER click any button labelled "Easy Apply", "Apply", "Apply now", or "Submit application".',
+    'PO-3. NEVER open or fill any job application form or modal.',
+    'PO-4. If you land on the jobs section by mistake, immediately navigate back to: https://www.linkedin.com/feed/',
+    'PO-5. If you see a post with an embedded job link, IGNORE that link entirely. Do not click it.',
+    'PO-6. READING POSTS: Look at each post\'s visible text in the page content above. Read the description of every post carefully.',
+    `PO-7. KEYWORD MATCHING: A post is RELEVANT if its description contains the target title "${settings.postTitle || ''}" OR any of these keywords: "${settings.relatedKeywords || ''}". Match is case-insensitive.`,
+    'PO-8. RELEVANT POST → ENGAGE: If a post is relevant, do ONE of these actions:',
+    '   a) Click the "Like" button on that post, OR',
+    '   b) Click the "Comment" button and type a short, genuine comment using one of the keywords naturally, OR',
+    '   c) Click "Connect" or "Follow" on the post author.',
+    'PO-9. SPECIAL COMMENT INSTRUCTIONS: If a relevant post explicitly says "comment interested", then comment exactly "Interested".',
+    'PO-10. SPECIAL EMAIL INSTRUCTIONS: If a relevant post asks users to comment "gmail" or "email", then:',
+    `  a) If outreach email is configured (${settings.outreachEmail || 'not configured'}), comment with that email.`,
+    '  b) If outreach email is NOT configured, comment: "Interested. Please check DM."',
+    'PO-11. NON-RELEVANT POST → SKIP: If a post does NOT match the keywords, do NOT engage. Use "scroll" to move to the next post.',
+    'PO-12. After engaging with a post (or skipping it), always use "scroll" to move further down the feed and find the next post.',
+    'PO-13. Keep scrolling and repeating this read -> match -> engage/skip loop continuously until user stops the agent.',
+  ].join('\n');
 
-CURRENT PAGE:
-- URL: ${snapshot.url}
-- Title: ${snapshot.title}
-- Page text (first ${settings.mode === 'post_outreach' ? '3000' : '1500'} chars):
-${snapshot.rawText.substring(0, settings.mode === 'post_outreach' ? 3000 : 1500)}
+  const resumeRule = resumeKeyword
+    ? [
+        '20. RESUME SELECTION (HARD RULE — NEVER SKIP):',
+        '    When page text contains "RESUME_STEP_DETECTED", follow these steps IN ORDER:',
+        '    a) If you see a "Show N more resumes" or "Show more" button, click it NOW and STOP. Do nothing else this turn.',
+        `    b) After ALL resumes are visible: Look at every element with checked=true or checked=false. Find the one whose text/label contains "${resumeKeyword}".`,
+        `    c) If the currently checked=true resume does NOT contain "${resumeKeyword}" in its name, click the one that DOES to switch selection.`,
+        '    d) Only AFTER the correct resume shows checked=true, click "Next" / "Review".',
+        '    e) NEVER click Next while the wrong resume is selected.',
+      ].join('\n')
+    : [
+        '20. RESUME SELECTION (HARD RULE — NEVER SKIP):',
+        '    When page text contains "RESUME_STEP_DETECTED", follow these steps IN ORDER:',
+        '    a) If you see a "Show N more resumes" or "Show more" button, click it NOW and STOP. Do nothing else this turn.',
+        `    b) After ALL resumes are visible: Look at every element with checked=true or checked=false. Find the one whose text/label best matches job title keywords [${titleTokens.join(', ')}].`,
+        '    c) If the currently checked=true resume does NOT match the job title, click the better-matching one to switch selection.',
+        '    d) Only AFTER the correct resume shows checked=true, click "Next" / "Review".',
+        '    e) NEVER click Next while the wrong resume is selected.',
+      ].join('\n');
 
-INTERACTIVE ELEMENTS ON PAGE (id, tag, text):
-${snapshot.elements.map(e => `[${e.id}] <${e.tag}${e.type ? ' type=' + e.type : ''}${e.role ? ' role=' + e.role : ''}> "${e.text}"${e.label ? ' label="' + e.label + '"' : ''}${e.value ? ' value="' + e.value + '"' : ''}${e.checked === true ? ' checked=true' : e.checked === false ? ' checked=false' : ''}${e.required ? ' required=true' : ''}${e.invalid ? ' invalid=true' : ''}${e.errorText ? ' error="' + e.errorText + '"' : ''}`).join('\n')}
+  const jobApplyRules = [
+    '1. If the page shows "No results found", click "Clear all filters" or change the search query.',
+    '2. If you see job listings, click on one that has "Easy Apply" in its text.',
+    '3. If you see an "Easy Apply" button on a job detail page, click it to start applying.',
+    '4. Inside an Easy Apply modal, fill form fields and click "Next", "Review", or "Submit application".',
+    '5. IMPORTANT: In the Easy Apply modal, only interact with elements that exist in the CURRENT SNAPSHOT. Do not try to answer questions from previous steps that are no longer visible.',
+    '6. IMPORTANT: If a modal section (like Education or Experience) is already filled in or requires no further input, simply click the "Review", "Next", or "Continue" button. EXCEPTION: If the page text contains "RESUME_STEP_DETECTED", you are on a resume step — do NOT click Next. Follow Rule 20 FIRST.',
+    '7. CRITICAL: NEVER repeat the exact same "type" or "clear_and_type" action on the same field twice in a row UNLESS the CURRENT SNAPSHOT still marks that field invalid or shows an error message for it. If the field\'s "value" in the CURRENT PAGE snapshot already shows your answer (e.g., value="10") and the field is not invalid, DO NOT type it again.',
+    '8. SUCCESS STATE: If you see "Your application was sent" or "Applied", you MUST click the "Done" button or the "Dismiss" / "Close" (X) button to close the modal. DO NOT try to answer anymore questions on this success screen.',
+    '9. After closing the success modal, look for the next job listing with "Easy Apply" and click it to start a new application.',
+    '10. You can use "navigate" action with a URL as value to go to a different page.',
+    '11. Do NOT declare "finish" unless you have exhaustively checked all pages and all jobs.',
+    '11. If an input field already has text but the prompt requires something else, use "clear_and_type" instead of "type".',
+    '12. To submit a search, after typing in the search box, use "pressEnter" on the same element.',
+    '13. For <select> dropdown elements (showing "Select an option" or similar), use "select_option" with the value to select.',
+    '14. For radio buttons, click the specific radio option (e.g., click the element with text "Yes").',
+    '15. After filling ALL new fields in a modal step, always click the primary action button ("Next", "Continue", "Review", or "Submit").',
+    '16. If CURRENT PAGE text contains "FORM_VALIDATION_ERRORS", do NOT click Review/Next/Submit until those specific fields are fixed. If it contains "RESUME_STEP_DETECTED", do NOT click Next until you have followed Rule 20.',
+    '17. If a field label or error mentions decimal, numeric, number, salary, CTC, notice period, or experience, enter digits only. Example: use "1" instead of "1 month".',
+    '18. HARD RULE: If you selected the same dropdown value 2+ times and the field now has a non-empty value without invalid=true, STOP selecting it again and click the step button (Next/Review/Continue/Submit).',
+    '19. HARD RULE: If the page appears unchanged after your previous action, you MUST switch strategy (different element, click progress button, or scroll). Never repeat the same action 3 times.',
+    resumeRule,
+  ].join('\n');
 
-RULES:
-${settings.mode === 'post_outreach' ? `
-⚠️  MODE: POST OUTREACH — Scroll the LinkedIn feed, read post descriptions, and engage only with posts that match the target keywords.
+  const rulesBlock = settings.mode === 'post_outreach' ? outreachRules : jobApplyRules;
 
-TARGET TITLE (primary): "${settings.postTitle || ''}"
-TARGET KEYWORDS (secondary): "${settings.relatedKeywords || ''}"
-
-POST OUTREACH RULES (STRICTLY FOLLOW):
-PO-1. NEVER navigate to any URL containing "/jobs/" — the LinkedIn Jobs section is completely OFF-LIMITS.
-PO-2. NEVER click any button labelled "Easy Apply", "Apply", "Apply now", or "Submit application".
-PO-3. NEVER open or fill any job application form or modal.
-PO-4. If you land on the jobs section by mistake, immediately navigate back to: https://www.linkedin.com/feed/
-PO-5. If you see a post with an embedded job link, IGNORE that link entirely. Do not click it.
-PO-6. READING POSTS: Look at each post's visible text in the page content above. Read the description of every post carefully.
-PO-7. KEYWORD MATCHING: A post is RELEVANT if its description contains the target title "${settings.postTitle || ''}" OR any of these keywords: "${settings.relatedKeywords || ''}". Match is case-insensitive.
-PO-8. RELEVANT POST → ENGAGE: If a post is relevant, do ONE of these actions:
-   a) Click the "Like" button on that post, OR
-   b) Click the "Comment" button and type a short, genuine comment using one of the keywords naturally, OR
-   c) Click "Connect" or "Follow" on the post author.
-PO-9. SPECIAL COMMENT INSTRUCTIONS: If a relevant post explicitly says "comment interested", then comment exactly "Interested".
-PO-10. SPECIAL EMAIL INSTRUCTIONS: If a relevant post asks users to comment "gmail" or "email", then:
-  a) If outreach email is configured (${settings.outreachEmail || 'not configured'}), comment with that email.
-  b) If outreach email is NOT configured, comment: "Interested. Please check DM."
-PO-11. NON-RELEVANT POST → SKIP: If a post does NOT match the keywords, do NOT engage. Use "scroll" to move to the next post.
-PO-12. After engaging with a post (or skipping it), always use "scroll" to move further down the feed and find the next post.
-PO-13. Keep scrolling and repeating this read -> match -> engage/skip loop continuously until user stops the agent.
-` : `
-1. If the page shows "No results found", click "Clear all filters" or change the search query.
-2. If you see job listings, click on one that has "Easy Apply" in its text.
-3. If you see an "Easy Apply" button on a job detail page, click it to start applying.
-4. Inside an Easy Apply modal, fill form fields and click "Next", "Review", or "Submit application".
-5. IMPORTANT: In the Easy Apply modal, only interact with elements that exist in the CURRENT SNAPSHOT. Do not try to answer questions from previous steps that are no longer visible.
-6. IMPORTANT: If a modal section (like Education or Experience) is already filled in or requires no further input, simply click the "Review", "Next", or "Continue" button. EXCEPTION: If the page text contains "RESUME_STEP_DETECTED", you are on a resume step — do NOT click Next. Follow Rule 20 FIRST.
-7. CRITICAL: NEVER repeat the exact same "type" or "clear_and_type" action on the same field twice in a row UNLESS the CURRENT SNAPSHOT still marks that field invalid or shows an error message for it. If the field's "value" in the CURRENT PAGE snapshot already shows your answer (e.g., value="10") and the field is not invalid, DO NOT type it again.
-8. SUCCESS STATE: If you see "Your application was sent" or "Applied", you MUST click the "Done" button or the "Dismiss" / "Close" (X) button to close the modal. DO NOT try to answer anymore questions on this success screen.
-9. After closing the success modal, look for the next job listing with "Easy Apply" and click it to start a new application.
-10. You can use "navigate" action with a URL as value to go to a different page.
-11. Do NOT declare "finish" unless you have exhaustively checked all pages and all jobs.
-11. If an input field already has text but the prompt requires something else, use "clear_and_type" instead of "type".
-12. To submit a search, after typing in the search box, use "pressEnter" on the same element.
-13. For <select> dropdown elements (showing "Select an option" or similar), use "select_option" with the value to select.
-14. For radio buttons, click the specific radio option (e.g., click the element with text "Yes").
-15. After filling ALL new fields in a modal step, always click the primary action button ("Next", "Continue", "Review", or "Submit").
-16. If CURRENT PAGE text contains "FORM_VALIDATION_ERRORS", do NOT click Review/Next/Submit until those specific fields are fixed. If it contains "RESUME_STEP_DETECTED", do NOT click Next until you have followed Rule 20.
-17. If a field label or error mentions decimal, numeric, number, salary, CTC, notice period, or experience, enter digits only. Example: use "1" instead of "1 month".
-18. HARD RULE: If you selected the same dropdown value 2+ times and the field now has a non-empty value without invalid=true, STOP selecting it again and click the step button (Next/Review/Continue/Submit).
-19. HARD RULE: If the page appears unchanged after your previous action, you MUST switch strategy (different element, click progress button, or scroll). Never repeat the same action 3 times.
-${resumeKeyword
-  ? `20. RESUME SELECTION (HARD RULE — NEVER SKIP):
-    When page text contains "RESUME_STEP_DETECTED", follow these steps IN ORDER:
-    a) If you see a "Show N more resumes" or "Show more" button, click it NOW and STOP. Do nothing else this turn.
-    b) After ALL resumes are visible: Look at every element with checked=true or checked=false. Find the one whose text/label contains "${resumeKeyword}".
-    c) If the currently checked=true resume does NOT contain "${resumeKeyword}" in its name, click the one that DOES to switch selection.
-    d) Only AFTER the correct resume shows checked=true, click "Next" / "Review".
-    e) NEVER click Next while the wrong resume is selected.`
-  : `20. RESUME SELECTION (HARD RULE — NEVER SKIP):
-    When page text contains "RESUME_STEP_DETECTED", follow these steps IN ORDER:
-    a) If you see a "Show N more resumes" or "Show more" button, click it NOW and STOP. Do nothing else this turn.
-    b) After ALL resumes are visible: Look at every element with checked=true or checked=false. Find the one whose text/label best matches job title keywords [${titleTokens.join(', ')}].
-    c) If the currently checked=true resume does NOT match the job title, click the better-matching one to switch selection.
-    d) Only AFTER the correct resume shows checked=true, click "Next" / "Review".
-    e) NEVER click Next while the wrong resume is selected.`
-}
-${stuckHint}
-
-AVAILABLE ACTIONS:
-- click: Click an element. Requires elementId.
-- type: Type text into an input. Requires elementId and value.
-- clear_and_type: Clear existing text then type new text. Requires elementId and value.
-- pressEnter: Press Enter key on an element. Requires elementId.
-- select_option: Select an option from a <select> dropdown. Requires elementId and value (the option text to select).
-- scroll: Scroll down to see more content.
-- navigate: Go to a URL. Requires value (the URL).
-- wait: Do nothing this turn.
-- finish: Stop the agent (only when truly done).
-
-Respond with ONLY a JSON object:
-{"action": "...", "elementId": "...", "value": "...", "reasoning": "..."}`;
+  const prompt = [
+    'You are an autonomous browser agent. You control a Chrome browser on LinkedIn.',
+    '',
+    `YOUR GOAL: ${currentGoal}${resumeContextLine}`,
+    '',
+    'CURRENT PAGE:',
+    `- URL: ${snapshot.url}`,
+    `- Title: ${snapshot.title}`,
+    `- Page text (first ${pageTextLimit} chars):`,
+    pageTextPreview,
+    '',
+    'INTERACTIVE ELEMENTS ON PAGE (id, tag, text):',
+    interactiveElementsText,
+    '',
+    'RULES:',
+    rulesBlock,
+    stuckHint,
+    '',
+    'AVAILABLE ACTIONS:',
+    '- click: Click an element. Requires elementId.',
+    '- type: Type text into an input. Requires elementId and value.',
+    '- clear_and_type: Clear existing text then type new text. Requires elementId and value.',
+    '- pressEnter: Press Enter key on an element. Requires elementId.',
+    '- select_option: Select an option from a <select> dropdown. Requires elementId and value (the option text to select).',
+    '- scroll: Scroll down to see more content.',
+    '- navigate: Go to a URL. Requires value (the URL).',
+    '- wait: Do nothing this turn.',
+    '- finish: Stop the agent (only when truly done).',
+    '',
+    'Respond with ONLY a JSON object:',
+    '{"action": "...", "elementId": "...", "value": "...", "reasoning": "..."}',
+  ].join('\n');
 
   if (settings.provider === 'anthropic') {
     return callAnthropic(prompt);
