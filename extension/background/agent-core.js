@@ -8,6 +8,7 @@ let settings = {};
 let stepCount = 0;
 let lastActions = []; // Track last N actions for stuck detection
 let recentPageSignatures = [];
+let agentTabId = null;
 let currentTaskId = null;
 let currentTaskSource = 'extension';
 let currentTaskChannel = 'extension_popup';
@@ -85,6 +86,7 @@ export async function startAgent(config) {
   agentState = 'NAVIGATING';
   stepCount = 0;
   recentPageSignatures = [];
+  agentTabId = null;
   currentTaskId = config.taskId || null;
   currentTaskSource = config.source || 'extension';
   currentTaskChannel = config.channel || 'extension_popup';
@@ -107,11 +109,14 @@ export async function startAgent(config) {
     const feedUrl = `https://www.linkedin.com/feed/`;
     broadcastLog(`[Post Outreach] Navigating to LinkedIn feed to scroll and match posts...`);
     const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
+    let tab;
     if (tabs.length > 0) {
-      await chrome.tabs.update(tabs[0].id, { url: feedUrl });
+      const preferred = tabs.find((t) => t.active) || tabs[0];
+      tab = await chrome.tabs.update(preferred.id, { url: feedUrl });
     } else {
-      await chrome.tabs.create({ url: feedUrl });
+      tab = await chrome.tabs.create({ url: feedUrl });
     }
+    agentTabId = tab?.id || null;
   } else {
     const timeLabel = { r86400: 'past 24 hours', r604800: 'past week', r2592000: 'past month' }[settings.jobPostedTime] || 'any time';
     currentGoal = `Find and apply to "${settings.searchQuery}" jobs on LinkedIn using Easy Apply (posted: ${timeLabel}).`;
@@ -121,13 +126,17 @@ export async function startAgent(config) {
     if (settings.jobPostedTime) searchUrl += `&f_TPR=${settings.jobPostedTime}`;
     broadcastLog(`Navigating to LinkedIn Jobs search (posted: ${timeLabel})...`);
     const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
+    let tab;
     if (tabs.length > 0) {
-      await chrome.tabs.update(tabs[0].id, { url: searchUrl });
+      const preferred = tabs.find((t) => t.active) || tabs[0];
+      tab = await chrome.tabs.update(preferred.id, { url: searchUrl });
     } else {
-      await chrome.tabs.create({ url: searchUrl });
+      tab = await chrome.tabs.create({ url: searchUrl });
     }
+    agentTabId = tab?.id || null;
   }
 
+  await setAgentTabAutoDiscardable(false);
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model} | Mode: ${settings.mode || 'job_apply'}`);
   // Wait for page to load before starting loop
   setTimeout(runAgentLoop, 5000);
@@ -137,6 +146,8 @@ export function stopAgent() {
   agentState = 'IDLE';
   lastActions = [];
   recentPageSignatures = [];
+  setAgentTabAutoDiscardable(true).catch(() => {});
+  agentTabId = null;
   broadcastLog('Stopped by user.');
   updateTaskStatus('stopped');
   completeAutomationSession();
@@ -159,6 +170,8 @@ async function runAgentLoop() {
   if (!isOutreach && stepCount > MAX_STEPS) {
     broadcastLog('Max steps reached. Stopping.', true);
     agentState = 'IDLE';
+    await setAgentTabAutoDiscardable(true);
+    agentTabId = null;
     updateTaskStatus('error');
     completeAutomationSession();
     chrome.runtime.sendMessage({ action: 'agent_error', error: 'Max steps reached' }).catch(() => {});
@@ -197,25 +210,22 @@ async function runAgentLoop() {
       const titleTokens = (settings.searchQuery || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
 
       try {
-        const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
-        if (tabs.length) {
-          const result = await chrome.tabs.sendMessage(tabs[0].id, {
-            action: 'auto_select_resume',
-            resumeKeyword,
-            titleTokens,
-          });
-          if (result?.changed) {
-            broadcastLog(`Auto-selected resume: ${result.selectedName}`);
-            // Rebuild snapshot to reflect the change
-            const refreshed = await getDOMSnapshotFromActiveTab();
-            if (refreshed) {
-              snapshot = refreshed;
-            }
-            resumeAutoSelectedHint = `\n\nSYSTEM: Resume "${result.selectedName}" was just auto-selected. DO NOT click any other resume card. Simply click the "Next" or "Review" button now.`;
-          } else {
-            // Already correct or no match — tell LLM not to change it
-            resumeAutoSelectedHint = `\n\nSYSTEM: Resume auto-selection has already run. The best matching resume is already checked. DO NOT click any resume card. Simply click the "Next" or "Review" button now.`;
+        const result = await sendMessageToAgentTab({
+          action: 'auto_select_resume',
+          resumeKeyword,
+          titleTokens,
+        });
+        if (result?.changed) {
+          broadcastLog(`Auto-selected resume: ${result.selectedName}`);
+          // Rebuild snapshot to reflect the change
+          const refreshed = await getDOMSnapshotFromActiveTab();
+          if (refreshed) {
+            snapshot = refreshed;
           }
+          resumeAutoSelectedHint = `\n\nSYSTEM: Resume "${result.selectedName}" was just auto-selected. DO NOT click any other resume card. Simply click the "Next" or "Review" button now.`;
+        } else {
+          // Already correct or no match — tell LLM not to change it
+          resumeAutoSelectedHint = `\n\nSYSTEM: Resume auto-selection has already run. The best matching resume is already checked. DO NOT click any resume card. Simply click the "Next" or "Review" button now.`;
         }
       } catch (err) {
         broadcastLog(`Resume auto-select error: ${err.message}`, true);
@@ -304,16 +314,35 @@ async function runAgentLoop() {
         return;
       }
       broadcastLog(`Navigating to: ${targetUrl}`);
-      const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
-      if (tabs.length > 0) {
-        await chrome.tabs.update(tabs[0].id, { url: targetUrl });
+      let tab = null;
+      if (agentTabId) {
+        try {
+          tab = await chrome.tabs.get(agentTabId);
+        } catch (_error) {
+          tab = null;
+        }
       }
+
+      if (!tab) {
+        tab = await resolveAgentTab();
+      }
+
+      if (tab) {
+        const updatedTab = await chrome.tabs.update(tab.id, { url: targetUrl });
+        agentTabId = updatedTab?.id || tab.id;
+      } else {
+        const createdTab = await chrome.tabs.create({ url: targetUrl });
+        agentTabId = createdTab?.id || null;
+      }
+      await setAgentTabAutoDiscardable(false);
       setTimeout(runAgentLoop, 5000);
       return;
     }
     
     if (decision.action === 'finish') {
       agentState = 'DONE';
+      await setAgentTabAutoDiscardable(true);
+      agentTabId = null;
       broadcastLog('Agent finished!');
       updateTaskStatus('completed');
       completeAutomationSession();
@@ -354,6 +383,8 @@ async function runAgentLoop() {
       setTimeout(runAgentLoop, 5000);
     } else {
       agentState = 'IDLE';
+      await setAgentTabAutoDiscardable(true);
+      agentTabId = null;
       updateTaskStatus('error');
       completeAutomationSession();
       chrome.runtime.sendMessage({ action: 'agent_error', error: error.message }).catch(() => {});
@@ -817,28 +848,89 @@ async function callOpenAICompat(prompt) {
 
 // ---- Tab Helpers ----
 
-async function getDOMSnapshotFromActiveTab() {
-  const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
-  if (!tabs.length) throw new Error('No LinkedIn tab found');
-  
-  const tab = tabs[0];
-  const response = await chrome.tabs.sendMessage(tab.id, { action: 'build_snapshot' });
-  return response.snapshot;
+async function setAgentTabAutoDiscardable(enabled) {
+  if (!agentTabId) return;
+  try {
+    await chrome.tabs.update(agentTabId, { autoDiscardable: enabled });
+  } catch (_error) {
+    // Ignore failures when tab is already closed.
+  }
 }
 
-async function triggerValidationRecovery() {
+async function resolveAgentTab() {
+  if (agentTabId) {
+    try {
+      const existing = await chrome.tabs.get(agentTabId);
+      if (existing?.url?.includes('linkedin.com')) {
+        return existing;
+      }
+    } catch (_error) {
+      // Tab was likely closed; fallback to discovery.
+    }
+  }
+
   const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
   if (!tabs.length) return null;
 
-  return chrome.tabs.sendMessage(tabs[0].id, { action: 'auto_fix_validation' });
+  const preferred = tabs.find((t) => t.active) || tabs[0];
+  agentTabId = preferred.id;
+  await setAgentTabAutoDiscardable(false);
+  return preferred;
+}
+
+function sendTabMessage(tabId, message) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+async function ensureLinkedInContentScript(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['content/linkedin.js'],
+  });
+}
+
+async function sendMessageToAgentTab(message, { injectOnFailure = true } = {}) {
+  const tab = await resolveAgentTab();
+  if (!tab) throw new Error('No LinkedIn tab found');
+
+  try {
+    return await sendTabMessage(tab.id, message);
+  } catch (error) {
+    const msg = String(error?.message || '').toLowerCase();
+    const shouldInject =
+      injectOnFailure &&
+      (msg.includes('receiving end does not exist') ||
+       msg.includes('could not establish connection') ||
+       msg.includes('message port closed'));
+
+    if (!shouldInject) throw error;
+
+    await ensureLinkedInContentScript(tab.id);
+    await setAgentTabAutoDiscardable(false);
+    return sendTabMessage(tab.id, message);
+  }
+}
+
+async function getDOMSnapshotFromActiveTab() {
+  const response = await sendMessageToAgentTab({ action: 'build_snapshot' });
+  return response?.snapshot || null;
+}
+
+async function triggerValidationRecovery() {
+  return sendMessageToAgentTab({ action: 'auto_fix_validation' }).catch(() => null);
 }
 
 async function executeActionInActiveTab(decision) {
-  const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
-  if (!tabs.length) return;
-  
-  await chrome.tabs.sendMessage(tabs[0].id, { 
-    action: 'execute_decision', 
-    decision 
+  await sendMessageToAgentTab({
+    action: 'execute_decision',
+    decision,
   });
 }

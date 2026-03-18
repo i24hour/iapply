@@ -387,8 +387,11 @@ async function smoothScroll(distance) {
 
 // Click with human-like behavior
 async function humanClick(element) {
+  if (!element) return;
+  const hiddenDoc = document.hidden || document.visibilityState !== 'visible';
+
   // Scroll element into view
-  if (document.hidden) {
+  if (hiddenDoc) {
     element.scrollIntoView({ behavior: 'instant', block: 'center' });
     await sleep(100);
   } else {
@@ -396,14 +399,32 @@ async function humanClick(element) {
     await sleep(500);
   }
   
+  if (typeof element.focus === 'function') {
+    element.focus({ preventScroll: true });
+  }
+
   // Simulate hover
   element.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-  await sleep(document.hidden ? 50 : randomDelay(200, 500));
+  await sleep(hiddenDoc ? 50 : randomDelay(200, 500));
   
-  // Click
+  // Click sequence (pointer/mouse + native click fallback) to improve reliability
+  // when the tab is inactive or browser is in background.
+  try {
+    element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, pointerType: 'mouse', isPrimary: true }));
+    element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 0, pointerType: 'mouse', isPrimary: true }));
+  } catch (_error) {
+    // PointerEvent may be unavailable in some contexts.
+  }
+
+  element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 }));
+  element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 0 }));
+  element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 0 }));
   element.click();
-  if (!document.hidden) {
+
+  if (!hiddenDoc) {
     await humanDelay();
+  } else {
+    await sleep(60);
   }
 }
 
