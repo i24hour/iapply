@@ -14,6 +14,8 @@ let postAgentJobTitle = '';
 let postAgentKeywords = '';
 let debugLogs = [];
 let agentLogs = [];
+let lastCapturedAgentFrame = null;
+let lastCapturedAgentFrameAt = 0;
 
 function appendAgentLog(message, isError = false) {
   agentLogs.push({ message, isError, timestamp: Date.now() });
@@ -82,39 +84,90 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function getPreferredLinkedInTab() {
+  const status = getAgentStatus();
+  const agentTabId = status?.tabId || null;
+
+  if (agentTabId) {
+    try {
+      const tab = await chrome.tabs.get(agentTabId);
+      if (tab?.url?.includes('linkedin.com')) {
+        return tab;
+      }
+    } catch {
+      // Agent tab might be closed or replaced. Fall back to discovery.
+    }
+  }
+
+  const linkedinTabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
+  if (!linkedinTabs.length) return null;
+  return linkedinTabs.find((t) => t.active) || linkedinTabs[0];
+}
+
+async function isTabVisibleForCapture(tab) {
+  if (!tab?.id || !tab?.windowId) return false;
+  const activeTabs = await chrome.tabs.query({ windowId: tab.windowId, active: true });
+  const activeTab = activeTabs[0];
+  return Boolean(activeTab && activeTab.id === tab.id);
+}
+
+async function captureTabWindow(tab) {
+  return new Promise((resolve) => {
+    chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 40 }, (image) => {
+      if (chrome.runtime.lastError || !image) {
+        resolve(null);
+        return;
+      }
+      resolve(image);
+    });
+  });
+}
+
+async function uploadFrameToEndpoint(dataUrl, endpointPath) {
+  const headers = await getAuthHeaders();
+  if (!headers.Authorization) return false;
+
+  const response = await fetch(`${API_URL}${endpointPath}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ screenshotBase64: dataUrl }),
+  });
+
+  return response.ok;
+}
+
+async function captureAgentFrame() {
+  const tab = await getPreferredLinkedInTab();
+  if (!tab) return null;
+
+  const tabVisible = await isTabVisibleForCapture(tab);
+  if (!tabVisible) return null;
+
+  return captureTabWindow(tab);
+}
+
 async function captureAndUploadFrame(trigger = 'interval') {
   try {
-    const linkedinTabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
-    const tab = linkedinTabs.find((t) => t.active) || linkedinTabs[0];
-    if (!tab) return;
-
-    const dataUrl = await new Promise((resolve) => {
-      chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 35 }, (image) => {
-        if (chrome.runtime.lastError || !image) {
-          resolve(null);
-          return;
-        }
-        resolve(image);
-      });
-    });
+    const dataUrl = await captureAgentFrame();
 
     if (!dataUrl) {
       if (trigger !== 'interval') {
-        emitAgentLog('Could not capture frame from visible LinkedIn tab.', true).catch(() => {});
+        if (lastCapturedAgentFrame) {
+          emitAgentLog('Live frame unavailable right now. Sending latest cached agent frame without switching tabs.').catch(() => {});
+        } else {
+          emitAgentLog('Could not capture frame without switching tabs. Keep LinkedIn agent tab visible in its window once to seed captures.', true).catch(() => {});
+        }
       }
-      return;
+      return null;
     }
 
-    const headers = await getAuthHeaders();
-    if (!headers.Authorization) return;
-
-    await fetch(`${API_URL}/agent/capture`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ screenshotBase64: dataUrl }),
-    });
+    lastCapturedAgentFrame = dataUrl;
+    lastCapturedAgentFrameAt = Date.now();
+    await uploadFrameToEndpoint(dataUrl, '/agent/capture');
+    return dataUrl;
   } catch {
     // Ignore transient capture/upload failures.
+    return null;
   }
 }
 
@@ -505,36 +558,31 @@ async function pollTelegramBridge() {
       }).catch(() => {});
     } else if (cmd.type === 'request_screenshot') {
       try {
-        const allTabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
-        const tabToCapture = allTabs[0];
-
-        if (!tabToCapture) {
-          forwardLogToBackend('No LinkedIn tab found to capture.', true);
+        const liveFrame = await captureAgentFrame();
+        if (liveFrame) {
+          lastCapturedAgentFrame = liveFrame;
+          lastCapturedAgentFrameAt = Date.now();
+          const uploaded = await uploadFrameToEndpoint(liveFrame, '/agent/screenshot');
+          if (!uploaded) {
+            forwardLogToBackend('Screenshot upload failed while sending live frame.', true);
+          } else {
+            forwardLogToBackend('Sent live screenshot from agent tab.').catch(() => {});
+          }
+        } else if (lastCapturedAgentFrame) {
+          const ageSec = Math.max(1, Math.round((Date.now() - lastCapturedAgentFrameAt) / 1000));
+          const uploaded = await uploadFrameToEndpoint(lastCapturedAgentFrame, '/agent/screenshot');
+          if (!uploaded) {
+            forwardLogToBackend('Screenshot upload failed for cached frame.', true);
+          } else {
+            forwardLogToBackend(`Sent latest cached screenshot (${ageSec}s old) without switching tabs.`).catch(() => {});
+          }
         } else {
-          await chrome.windows.update(tabToCapture.windowId, { focused: true });
-          await chrome.tabs.update(tabToCapture.id, { active: true });
-          await sleep(800);
-
-          captureAndUploadFrame('manual').catch(() => {});
-
-          chrome.tabs.captureVisibleTab(tabToCapture.windowId, { format: 'jpeg', quality: 40 }, async (dataUrl) => {
-            if (chrome.runtime.lastError || !dataUrl) {
-              forwardLogToBackend('Screenshot capture failed: ' + (chrome.runtime.lastError?.message || 'No data'), true);
-              return;
-            }
-            try {
-              const res = await fetch(`${API_URL}/agent/screenshot`, {
-                method: 'POST',
-                headers: await getAuthHeaders(),
-                body: JSON.stringify({ screenshotBase64: dataUrl }),
-              });
-              if (!res.ok) {
-                forwardLogToBackend('Screenshot upload failed: HTTP ' + res.status, true);
-              }
-            } catch (fetchErr) {
-              forwardLogToBackend('Screenshot upload error: ' + fetchErr.message, true);
-            }
-          });
+          const tab = await getPreferredLinkedInTab();
+          if (tab) {
+            forwardLogToBackend('Agent tab is not visible right now and no cached screenshot is available yet.', true);
+          } else {
+            forwardLogToBackend('No LinkedIn tab found to capture.', true);
+          }
         }
       } catch (error) {
         forwardLogToBackend('Screenshot error: ' + error.message, true);

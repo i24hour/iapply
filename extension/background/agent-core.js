@@ -158,7 +158,8 @@ export function getAgentStatus() {
   return {
     state: agentState,
     goal: currentGoal,
-    step: stepCount
+    step: stepCount,
+    tabId: agentTabId
   };
 }
 
@@ -461,6 +462,10 @@ function expectsNumericSnapshotValue(element) {
     combined.includes('decimal') ||
     combined.includes('numeric') ||
     combined.includes('number') ||
+    combined.includes('compensation') ||
+    combined.includes('pay') ||
+    combined.includes('package') ||
+    combined.includes('remuneration') ||
     combined.includes('ctc') ||
     combined.includes('salary') ||
     combined.includes('notice period') ||
@@ -468,10 +473,33 @@ function expectsNumericSnapshotValue(element) {
   );
 }
 
+function hasNumericToken(value) {
+  return /-?\d+(?:\.\d+)?/.test(String(value || ''));
+}
+
+function shouldOverwriteInvalidFilledField(element) {
+  if (!element?.invalid) return false;
+  const combinedValue = `${element?.value || ''} ${element?.text || ''}`.trim();
+  if (!combinedValue) return true;
+
+  // If field expects a number but has non-numeric value (e.g. "Yes"), force overwrite.
+  if (expectsNumericSnapshotValue(element)) {
+    return !hasNumericToken(combinedValue);
+  }
+
+  return false;
+}
+
 function pickRecoveryValue(element) {
   const combined = `${element?.label || ''} ${element?.text || ''}`.toLowerCase();
   const numeric = expectsNumericSnapshotValue(element);
 
+  if (combined.includes('expected compensation') || combined.includes('expected package')) {
+    return '300000';
+  }
+  if (combined.includes('current compensation') || combined.includes('current package')) {
+    return '200000';
+  }
   if (combined.includes('expected ctc') || combined.includes('expected salary')) {
     return '300000';
   }
@@ -485,7 +513,7 @@ function pickRecoveryValue(element) {
     return numeric ? '3' : '3 years';
   }
 
-  return numeric ? '1' : 'Yes';
+  return numeric ? '1' : 'No';
 }
 
 function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
@@ -515,10 +543,11 @@ function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
   // there is a real validation blocker. Fix the first truly empty field.
   const emptyRequiredField = elements.find((element) => {
     if (isPrimaryProgressButton(element)) return false;
-    // Only fix fields that are genuinely empty — never overwrite existing values.
-    if (element.invalid && hasMeaningfulFieldValue(element)) return false;
+    // Keep prefilled valid-looking values, but overwrite clearly invalid values
+    // when they don't match expected numeric format.
+    if (element.invalid && hasMeaningfulFieldValue(element) && !shouldOverwriteInvalidFilledField(element)) return false;
     return (element.required && !hasMeaningfulFieldValue(element)) ||
-           (element.invalid && !hasMeaningfulFieldValue(element));
+           element.invalid;
   });
 
   if (emptyRequiredField) {

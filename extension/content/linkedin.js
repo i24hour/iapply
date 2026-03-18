@@ -581,9 +581,10 @@ async function fillFormStep() {
   for (const group of radioGroups) {
     const checkedRadio = group.querySelector('input[type="radio"]:checked');
     if (!checkedRadio) {
-      const firstRadio = group.querySelector('input[type="radio"]');
-      if (firstRadio) {
-        await humanClick(firstRadio);
+      const radios = Array.from(group.querySelectorAll('input[type="radio"]'));
+      const preferred = findPreferredNoRadioOption(radios) || radios[0];
+      if (preferred) {
+        await humanClick(preferred);
       }
     }
   }
@@ -660,6 +661,30 @@ function getFieldLabel(el) {
   if (forLabel && forLabel.textContent) return forLabel.textContent.trim();
 
   return el.placeholder || el.name || '';
+}
+
+function findPreferredNoRadioOption(radios = []) {
+  const noPattern = /\bno\b/;
+  for (const radio of radios) {
+    if (!radio) continue;
+    const ownLabel = radio.closest('label')?.innerText || '';
+    let forLabel = '';
+    if (radio.id) {
+      try {
+        const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+          ? CSS.escape(radio.id)
+          : radio.id;
+        forLabel = document.querySelector(`label[for="${escapedId}"]`)?.innerText || '';
+      } catch (_error) {
+        forLabel = '';
+      }
+    }
+
+    const combined = normalizeText(`${ownLabel} ${forLabel}`);
+    if (noPattern.test(combined)) return radio;
+  }
+
+  return null;
 }
 
 function getInlineErrorText(el) {
@@ -766,6 +791,10 @@ function expectsNumericValue(labelText, el, errorText = '') {
     combined.includes('numeric') ||
     combined.includes('number') ||
     combined.includes('integer') ||
+    combined.includes('compensation') ||
+    combined.includes('pay') ||
+    combined.includes('package') ||
+    combined.includes('remuneration') ||
     combined.includes('ctc') ||
     combined.includes('salary') ||
     combined.includes('notice period') ||
@@ -803,6 +832,12 @@ function pickFallbackValue(labelText, el, errorText = '') {
   const label = (labelText || '').toLowerCase();
   const numeric = expectsNumericValue(labelText, el, errorText);
 
+  if (label.includes('expected compensation') || label.includes('expected package')) {
+    return '300000';
+  }
+  if (label.includes('current compensation') || label.includes('current package')) {
+    return '200000';
+  }
   if (label.includes('expected ctc') || label.includes('expected salary')) {
     return '300000';
   }
@@ -819,7 +854,7 @@ function pickFallbackValue(labelText, el, errorText = '') {
     return '9876543210';
   }
 
-  return numeric ? '1' : 'Yes';
+  return numeric ? '1' : 'No';
 }
 
 async function setInputValue(element, value) {
@@ -954,6 +989,7 @@ function listModalValidationIssues() {
     const invalid =
       field.getAttribute('aria-invalid') === 'true' ||
       Boolean(errorText) ||
+      (typeof field.checkValidity === 'function' && !field.checkValidity()) ||
       (isDropdownLikeElement(field) && required && isPlaceholderSelection(value));
     const type = (field.getAttribute('type') || '').toLowerCase();
 
@@ -1018,7 +1054,8 @@ async function autoFixModalValidationIssues() {
         const group = name ? Array.from(document.querySelectorAll(`input[type="radio"][name="${name}"]`)) : [field];
         const selected = group.some(r => r.checked);
         if (!selected && group.length) {
-          await humanClick(group[0]);
+          const preferred = findPreferredNoRadioOption(group) || group[0];
+          await humanClick(preferred);
           fixed++;
           details.push(`Selected radio option for ${label || name || 'required question'}`);
           postAgentLog(`Selected radio option for ${label || name || 'required question'}.`);
@@ -1251,7 +1288,10 @@ function buildDOMSnapshot() {
       value: getFieldCurrentValue(el) || undefined,
       label: getFieldLabel(el) || undefined,
       required: el.required || el.getAttribute('aria-required') === 'true' || undefined,
-      invalid: el.getAttribute('aria-invalid') === 'true' || undefined,
+      invalid: (
+        el.getAttribute('aria-invalid') === 'true' ||
+        (typeof el.checkValidity === 'function' && !el.checkValidity())
+      ) || undefined,
       errorText: getInlineErrorText(el) || undefined,
       checked: isElementChecked(el),
       center: {
