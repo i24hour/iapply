@@ -104,13 +104,6 @@ async function getPreferredLinkedInTab() {
   return linkedinTabs.find((t) => t.active) || linkedinTabs[0];
 }
 
-async function isTabVisibleForCapture(tab) {
-  if (!tab?.id || !tab?.windowId) return false;
-  const activeTabs = await chrome.tabs.query({ windowId: tab.windowId, active: true });
-  const activeTab = activeTabs[0];
-  return Boolean(activeTab && activeTab.id === tab.id);
-}
-
 async function captureTabWindow(tab) {
   return new Promise((resolve) => {
     chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 40 }, (image) => {
@@ -139,9 +132,6 @@ async function uploadFrameToEndpoint(dataUrl, endpointPath) {
 async function captureAgentFrame() {
   const tab = await getPreferredLinkedInTab();
   if (!tab) return null;
-
-  const tabVisible = await isTabVisibleForCapture(tab);
-  if (!tabVisible) return null;
 
   return captureTabWindow(tab);
 }
