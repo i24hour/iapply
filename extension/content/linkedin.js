@@ -720,6 +720,109 @@ function isDropdownLikeElement(el) {
   return tag === 'select' || role === 'combobox' || hasListbox;
 }
 
+function isCheckboxLikeElement(el) {
+  if (!el) return false;
+  const tag = (el.tagName || '').toLowerCase();
+  const role = (el.getAttribute('role') || '').toLowerCase();
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  return type === 'checkbox' || role === 'checkbox' || (tag === 'input' && type === 'checkbox');
+}
+
+function getCheckboxErrorText(field, modal = getEasyApplyModal()) {
+  const scopes = [
+    field?.closest?.('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping, [role="group"], .artdeco-form__element, .artdeco-inline-feedback'),
+    field?.parentElement,
+    field?.closest?.('label'),
+    modal,
+  ].filter(Boolean);
+
+  for (const scope of scopes) {
+    const errorEl = scope.querySelector('.artdeco-inline-feedback__message, .artdeco-inline-feedback--error, .fb-dash-form-element__error-message, [role="alert"]');
+    const errorText = errorEl?.textContent?.trim() || '';
+    if (errorText && /checkbox|check|confirm/i.test(errorText)) {
+      return errorText;
+    }
+
+    const text = normalizeText(scope.textContent || '');
+    if (text.includes('select checkbox to proceed')) {
+      return 'Select checkbox to proceed';
+    }
+  }
+
+  return '';
+}
+
+function getCheckboxInput(field) {
+  if (!field) return null;
+  if ((field.getAttribute('type') || '').toLowerCase() === 'checkbox') return field;
+
+  const nested = field.querySelector?.('input[type="checkbox"]');
+  if (nested) return nested;
+
+  const labeled = field.closest?.('label')?.querySelector?.('input[type="checkbox"]');
+  if (labeled) return labeled;
+
+  return null;
+}
+
+function isCheckboxChecked(field) {
+  const input = getCheckboxInput(field);
+  if (input) return Boolean(input.checked);
+
+  const checked = isElementChecked(field);
+  return checked === true;
+}
+
+async function ensureCheckboxChecked(field) {
+  if (!field) return false;
+  if (isCheckboxChecked(field)) return true;
+
+  const input = getCheckboxInput(field);
+  const targets = [];
+
+  const addTarget = (candidate) => {
+    if (!candidate || targets.includes(candidate)) return;
+    targets.push(candidate);
+  };
+
+  addTarget(field);
+  addTarget(input);
+
+  if (input?.id) {
+    try {
+      const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(input.id) : input.id;
+      addTarget(document.querySelector(`label[for="${escapedId}"]`));
+    } catch (_error) {
+      // Ignore CSS selector escape failures.
+    }
+  }
+
+  addTarget(field.closest?.('label'));
+  addTarget(field.closest?.('[role="checkbox"], [role="button"], .artdeco-checkbox'));
+  addTarget(field.parentElement);
+
+  for (const target of targets) {
+    if (!target || !isElementVisible(target)) continue;
+
+    await humanClick(target);
+    await sleep(120);
+
+    if (input && !input.checked) {
+      input.checked = true;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('click', { bubbles: true }));
+      await sleep(80);
+    }
+
+    if (isCheckboxChecked(field)) {
+      return true;
+    }
+  }
+
+  return isCheckboxChecked(field);
+}
+
 function getVisibleDropdownOptions() {
   const selectors = [
     '[role="option"]',
@@ -973,7 +1076,7 @@ function listModalValidationIssues() {
 
   const issues = [];
   const fields = modal.querySelectorAll(
-    'input, textarea, select, [role="combobox"], button[aria-haspopup="listbox"], [role="button"][aria-haspopup="listbox"]'
+    'input, textarea, select, [role="combobox"], [role="checkbox"], button[aria-haspopup="listbox"], [role="button"][aria-haspopup="listbox"]'
   );
 
   for (const field of fields) {
@@ -981,6 +1084,7 @@ function listModalValidationIssues() {
 
     const label = getFieldLabel(field);
     const errorText = getInlineErrorText(field);
+    const checkboxErrorText = isCheckboxLikeElement(field) ? getCheckboxErrorText(field, modal) : '';
     const value = getFieldCurrentValue(field);
     const required =
       field.required ||
@@ -989,6 +1093,7 @@ function listModalValidationIssues() {
     const invalid =
       field.getAttribute('aria-invalid') === 'true' ||
       Boolean(errorText) ||
+      Boolean(checkboxErrorText) ||
       (typeof field.checkValidity === 'function' && !field.checkValidity()) ||
       (isDropdownLikeElement(field) && required && isPlaceholderSelection(value));
     const type = (field.getAttribute('type') || '').toLowerCase();
@@ -996,13 +1101,14 @@ function listModalValidationIssues() {
     // Ignore hidden helper fields and search fields in dropdown widgets.
     if (type === 'hidden' || field.getAttribute('aria-hidden') === 'true') continue;
 
-    const missingRequired = required && !value && !isDropdownLikeElement(field);
+    const checkboxMissing = isCheckboxLikeElement(field) && !isCheckboxChecked(field);
+    const missingRequired = checkboxMissing || (required && !value && !isDropdownLikeElement(field));
 
     if (missingRequired || invalid) {
       issues.push({
         field,
         label,
-        errorText,
+        errorText: errorText || checkboxErrorText,
         required,
         invalid,
         value,
@@ -1038,13 +1144,17 @@ async function autoFixModalValidationIssues() {
         postAgentLog(`Could not resolve dropdown issue for ${label || 'dropdown'} yet.`, true);
       }
 
-      if (type === 'checkbox') {
-        if (!field.checked) {
-          await humanClick(field);
-          fixed++;
-          details.push(`Checked ${label || 'required checkbox'}`);
-          postAgentLog(`Checked required box for ${label || 'required checkbox'}.`);
-          await sleep(120);
+      if (type === 'checkbox' || isCheckboxLikeElement(field)) {
+        if (!isCheckboxChecked(field)) {
+          const checked = await ensureCheckboxChecked(field);
+          if (checked) {
+            fixed++;
+            details.push(`Checked ${label || 'required checkbox'}`);
+            postAgentLog(`Checked required box for ${label || 'required checkbox'}.`);
+            await sleep(120);
+          } else {
+            postAgentLog(`Could not check required box for ${label || 'required checkbox'} yet.`, true);
+          }
         }
         continue;
       }
