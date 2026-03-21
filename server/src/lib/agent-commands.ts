@@ -7,6 +7,7 @@ export interface AgentCommand {
   type: 'start_agent' | 'stop_agent' | 'request_screenshot' | 'start_recording' | 'stop_recording';
   payload: {
     searchQuery?: string;
+    count?: number;
     userGoal?: string;
     provider?: string;
     model?: string;

@@ -13,6 +13,9 @@ let currentTaskId = null;
 let currentTaskSource = 'extension';
 let currentTaskChannel = 'extension_popup';
 let currentAgentSessionId = null;
+let targetApplyCount = 10;
+let appliedCount = 0;
+let lastSuccessSignature = '';
 const MAX_STEPS = 50;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
 const STAGNATION_WINDOW = 4;
@@ -91,6 +94,9 @@ export async function startAgent(config) {
   currentTaskSource = config.source || 'extension';
   currentTaskChannel = config.channel || 'extension_popup';
   currentAgentSessionId = config.agentSessionId || null;
+  targetApplyCount = Math.min(Math.max(Number(config.count) || 10, 1), 100);
+  appliedCount = 0;
+  lastSuccessSignature = '';
 
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
   if (settings.selectedResume) {
@@ -120,6 +126,7 @@ export async function startAgent(config) {
   } else {
     const timeLabel = { r86400: 'past 24 hours', r604800: 'past week', r2592000: 'past month' }[settings.jobPostedTime] || 'any time';
     currentGoal = `Find and apply to "${settings.searchQuery}" jobs on LinkedIn using Easy Apply (posted: ${timeLabel}).`;
+    broadcastLog(`Target applications for this run: ${targetApplyCount}`);
 
     // Build job search URL — add f_TPR time filter if selected
     let searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(settings.searchQuery)}&f_AL=true`;
@@ -148,6 +155,8 @@ export function stopAgent() {
   recentPageSignatures = [];
   setAgentTabAutoDiscardable(true).catch(() => {});
   agentTabId = null;
+  appliedCount = 0;
+  lastSuccessSignature = '';
   broadcastLog('Stopped by user.');
   updateTaskStatus('stopped');
   completeAutomationSession();
@@ -159,7 +168,9 @@ export function getAgentStatus() {
     state: agentState,
     goal: currentGoal,
     step: stepCount,
-    tabId: agentTabId
+    tabId: agentTabId,
+    targetApplyCount,
+    appliedCount
   };
 }
 
@@ -197,6 +208,32 @@ async function runAgentLoop() {
       broadcastLog('CAPTCHA detected! Please solve it manually, then the agent will continue.', true);
       setTimeout(runAgentLoop, 10000);
       return;
+    }
+
+    if (!isOutreach) {
+      const successSignal = hasApplicationSuccessSignal(snapshot.rawText);
+      if (successSignal) {
+        const signature = buildApplicationSuccessSignature(snapshot);
+        if (signature && signature !== lastSuccessSignature) {
+          lastSuccessSignature = signature;
+          appliedCount += 1;
+          const company = extractAppliedCompany(snapshot.rawText);
+          broadcastLog(`✅ Applied${company ? ` to ${company}` : ''}. Progress ${appliedCount}/${targetApplyCount}.`);
+
+          if (appliedCount >= targetApplyCount) {
+            agentState = 'DONE';
+            await setAgentTabAutoDiscardable(true);
+            agentTabId = null;
+            broadcastLog(`Target reached (${appliedCount}/${targetApplyCount}). Finishing run.`);
+            updateTaskStatus('completed');
+            completeAutomationSession();
+            chrome.runtime.sendMessage({ action: 'agent_finished' }).catch(() => {});
+            return;
+          }
+        }
+      } else {
+        lastSuccessSignature = '';
+      }
     }
 
     broadcastLog(`Page: ${snapshot.url} | ${snapshot.elements.length} elements`);
@@ -409,6 +446,37 @@ function updatePageSignature(snapshot) {
 
   recentPageSignatures.push(signature);
   if (recentPageSignatures.length > 8) recentPageSignatures.shift();
+}
+
+function hasApplicationSuccessSignal(rawText = '') {
+  const text = String(rawText || '').toLowerCase();
+  return (
+    text.includes('your application was sent') ||
+    text.includes('application was sent') ||
+    text.includes('application submitted')
+  );
+}
+
+function extractAppliedCompany(rawText = '') {
+  const text = String(rawText || '');
+  const sentToMatch = text.match(/your application was sent(?:\s+to)?\s+([^\n.]+)/i);
+  if (sentToMatch?.[1]) {
+    return sentToMatch[1].replace(/\s+/g, ' ').trim();
+  }
+
+  const applyToMatch = text.match(/apply to\s+([^\n]+)/i);
+  if (applyToMatch?.[1]) {
+    return applyToMatch[1].replace(/\s+/g, ' ').trim();
+  }
+
+  return '';
+}
+
+function buildApplicationSuccessSignature(snapshot) {
+  const company = extractAppliedCompany(snapshot?.rawText || '');
+  const markerMatch = String(snapshot?.rawText || '').match(/your application was sent[^\n]*/i);
+  const marker = markerMatch?.[0]?.trim() || '';
+  return `${snapshot?.url || ''}|${company}|${marker}`.trim();
 }
 
 function isPageStagnant() {
@@ -688,6 +756,7 @@ async function callLLM(snapshot, stuckHint = '') {
     '18. HARD RULE: If you selected the same dropdown value 2+ times and the field now has a non-empty value without invalid=true, STOP selecting it again and click the step button (Next/Review/Continue/Submit).',
     '19. HARD RULE: If the page appears unchanged after your previous action, you MUST switch strategy (different element, click progress button, or scroll). Never repeat the same action 3 times.',
     resumeRule,
+    `21. STOP CONDITION: This run target is ${targetApplyCount} successful applications. Once reached, return action "finish".`,
   ].join('\n');
 
   const rulesBlock = settings.mode === 'post_outreach' ? outreachRules : jobApplyRules;

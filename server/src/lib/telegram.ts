@@ -23,6 +23,7 @@ type TelegramIntent = {
   query?: string;
   userGoal?: string;
   reply?: string;
+  count?: number;
 };
 
 function isLocalUrl(url?: string) {
@@ -156,6 +157,15 @@ function detectDirectIntent(text: string): TelegramIntent | null {
   return null;
 }
 
+function extractRequestedApplyCount(text: string, fallback = 10) {
+  const normalized = String(text || '').toLowerCase();
+  const match = normalized.match(/\b(\d{1,3})\s*(?:jobs?|applications?)\b/);
+  if (!match) return fallback;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.max(parsed, 1), 100);
+}
+
 async function classifyTelegramIntent(params: {
   userId: string;
   userEmail?: string | null;
@@ -244,6 +254,7 @@ ${params.message}`;
     if (parsed.intent === 'apply') {
       parsed.query = normalizeApplyQuery(parsed.query || '');
       parsed.userGoal = String(parsed.userGoal || params.message).trim();
+      parsed.count = extractRequestedApplyCount(params.message, 10);
     }
     return parsed;
   } catch (error) {
@@ -478,6 +489,7 @@ export function startTelegramBot(token: string) {
     userGoal?: string
   ) {
     const cleanedQuery = normalizeApplyQuery(query);
+    const requestedCount = extractRequestedApplyCount(userGoal || originalText || query, 10);
     if (!cleanedQuery) {
       bot!.sendMessage(
         chatId,
@@ -506,6 +518,7 @@ export function startTelegramBot(token: string) {
       type: 'start_agent',
       payload: {
         searchQuery: cleanedQuery,
+        count: requestedCount,
         userGoal: (userGoal || originalText || cleanedQuery).trim(),
         provider: 'gemini',
         model: process.env.TELEGRAM_AGENT_MODEL?.trim() || 'gemini-3.1-flash-lite-preview',
@@ -522,6 +535,7 @@ export function startTelegramBot(token: string) {
       chatId,
       `✅ *Agent Started!*\n\n` +
         `🔍 Searching: _${cleanedQuery}_\n` +
+        `🎯 Target: *${requestedCount} jobs*\n` +
         `📋 Command ID: \`${cmd.id}\`\n` +
         `${resumeNote}\n\n` +
         `I'll send you live updates as the agent works.\n` +

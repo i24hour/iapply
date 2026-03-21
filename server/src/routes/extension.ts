@@ -9,6 +9,10 @@ import { getTaskRunByAgentSession, updateTaskRunStatus } from '../lib/usage-trac
 
 const router = Router();
 
+function escapeTelegramMarkdown(value: string) {
+  return String(value || '').replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
 // Get pending commands for extension
 router.get('/commands', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -184,6 +188,23 @@ router.post('/application', authenticate, async (req: AuthRequest, res: Response
       .eq('user_id', req.userId)
       .eq('job_id', jobId)
       .select();
+
+    if (wasSuccessful && req.userId) {
+      try {
+        const { data: job } = await supabase
+          .from('jobs')
+          .select('company,title')
+          .eq('id', jobId)
+          .maybeSingle();
+
+        const company = escapeTelegramMarkdown(job?.company || 'Unknown Company');
+        const title = escapeTelegramMarkdown(job?.title || 'Unknown Role');
+        const { sendTelegramMessage } = await import('../lib/telegram.js');
+        await sendTelegramMessage(req.userId, `✅ Applied to *${company}* \\- *${title}*`);
+      } catch (notifyError) {
+        console.error('Failed to send per-application Telegram update:', notifyError);
+      }
+    }
 
     res.json({ success: true, data: { updated: result?.length || 0 } });
   } catch (error) {
