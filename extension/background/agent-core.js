@@ -16,9 +16,15 @@ let currentAgentSessionId = null;
 let targetApplyCount = 10;
 let appliedCount = 0;
 let lastSuccessSignature = '';
+let lastAutoDebugCaptureSignature = '';
+let lastAutoDebugCaptureAt = 0;
+let progressClickStreak = 0;
+let validationSummaryStreak = 0;
+let lastValidationSummaryKey = '';
 const MAX_STEPS = 50;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
 const STAGNATION_WINDOW = 4;
+const AUTO_DEBUG_CAPTURE_COOLDOWN_MS = 60000;
 
 // Constants
 const API_URL = 'https://iapply-telegram-bot.onrender.com';
@@ -97,6 +103,11 @@ export async function startAgent(config) {
   targetApplyCount = Math.min(Math.max(Number(config.count) || 10, 1), 100);
   appliedCount = 0;
   lastSuccessSignature = '';
+  lastAutoDebugCaptureSignature = '';
+  lastAutoDebugCaptureAt = 0;
+  progressClickStreak = 0;
+  validationSummaryStreak = 0;
+  lastValidationSummaryKey = '';
 
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
   if (settings.selectedResume) {
@@ -157,6 +168,11 @@ export function stopAgent() {
   agentTabId = null;
   appliedCount = 0;
   lastSuccessSignature = '';
+  lastAutoDebugCaptureSignature = '';
+  lastAutoDebugCaptureAt = 0;
+  progressClickStreak = 0;
+  validationSummaryStreak = 0;
+  lastValidationSummaryKey = '';
   broadcastLog('Stopped by user.');
   updateTaskStatus('stopped');
   completeAutomationSession();
@@ -240,19 +256,23 @@ async function runAgentLoop() {
 
     // Auto-select resume if we detect a resume step (hardcoded, no LLM needed)
     let resumeAutoSelectedHint = '';
+    let resumeSelectionCommitted = true;
     if (snapshot.rawText?.includes('RESUME_STEP_DETECTED')) {
       broadcastLog('Resume selection step detected — running auto-select...');
       const goalText = (settings.userGoal || settings.searchQuery || '').toLowerCase();
       const hintMatch = goalText.match(/\b(\w+)\s+resume\b/i);
       const resumeKeyword = hintMatch?.[1]?.toLowerCase() || null;
       const titleTokens = (settings.searchQuery || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
+      const preferredResumeName = settings?.selectedResume?.file_name || '';
 
       try {
         const result = await sendMessageToAgentTab({
           action: 'auto_select_resume',
+          preferredResumeName,
           resumeKeyword,
           titleTokens,
         });
+        resumeSelectionCommitted = Boolean(result?.selectionCommitted);
         if (result?.changed) {
           broadcastLog(`Auto-selected resume: ${result.selectedName}`);
           // Rebuild snapshot to reflect the change
@@ -260,13 +280,19 @@ async function runAgentLoop() {
           if (refreshed) {
             snapshot = refreshed;
           }
-          resumeAutoSelectedHint = `\n\nSYSTEM: Resume "${result.selectedName}" was just auto-selected. DO NOT click any other resume card. Simply click the "Next" or "Review" button now.`;
+          resumeAutoSelectedHint = `\n\nSYSTEM: Resume "${result.selectedName}" was auto-selected and committed. DO NOT click any other resume card. Click "Next" or "Review".`;
+        } else if (resumeSelectionCommitted) {
+          const selectedName = result?.selectedName || preferredResumeName || 'current resume';
+          resumeAutoSelectedHint = `\n\nSYSTEM: Resume selection is already committed ("${selectedName}"). DO NOT click any resume card. Click "Next" or "Review".`;
         } else {
-          // Already correct or no match — tell LLM not to change it
-          resumeAutoSelectedHint = `\n\nSYSTEM: Resume auto-selection has already run. The best matching resume is already checked. DO NOT click any resume card. Simply click the "Next" or "Review" button now.`;
+          const reason = result?.reason || 'selection not confirmed';
+          broadcastLog(`Resume selection not confirmed: ${reason}. Blocking progress until resume is committed.`, true);
+          resumeAutoSelectedHint = `\n\nSYSTEM: Resume selection is NOT confirmed (${reason}). DO NOT click Next/Review yet. First select and commit the correct resume card.`;
         }
       } catch (err) {
+        resumeSelectionCommitted = false;
         broadcastLog(`Resume auto-select error: ${err.message}`, true);
+        resumeAutoSelectedHint = '\n\nSYSTEM: Resume auto-selection failed. Do NOT click Next/Review until resume selection is confirmed.';
       }
     }
 
@@ -298,6 +324,11 @@ async function runAgentLoop() {
       }
     }
 
+    const validationSummary = !isOutreach ? getValidationSummaryFromRawText(snapshot.rawText) : '';
+    if (!isOutreach) {
+      updateValidationSummaryStreak(validationSummary);
+    }
+
     updatePageSignature(snapshot);
     const pageIsStagnant = isPageStagnant();
 
@@ -321,6 +352,41 @@ async function runAgentLoop() {
       broadcastLog(`Stuck detected! Page unchanged for ${STAGNATION_WINDOW} steps. Triggering recovery strategy.`, true);
     }
 
+    let debugImageDataUrl = '';
+    if (!isOutreach) {
+      const shouldCaptureForRepeatedProgress = repeatedActionDetected && isRepeatedProgressAction(snapshot, repeatedActionKey);
+      const shouldCaptureForStagnantValidation = pageIsStagnant && Boolean(validationSummary);
+      const shouldCaptureForProgressStreak = progressClickStreak >= 2;
+      const shouldCaptureForValidationStreak = validationSummaryStreak >= 2 && Boolean(validationSummary);
+      const shouldCaptureForResumeRequiredError = /resume is required/i.test(String(snapshot.rawText || ''));
+      if (
+        shouldCaptureForRepeatedProgress ||
+        shouldCaptureForStagnantValidation ||
+        shouldCaptureForProgressStreak ||
+        shouldCaptureForValidationStreak ||
+        shouldCaptureForResumeRequiredError
+      ) {
+        const captureReason = shouldCaptureForResumeRequiredError
+          ? 'resume required validation stuck'
+          : shouldCaptureForValidationStreak
+            ? 'repeated validation errors'
+            : shouldCaptureForProgressStreak
+              ? 'repeated progress attempts'
+              : 'stuck on Review/Next';
+        const captureResult = await maybeCaptureAutoDebugSnapshot(snapshot, repeatedActionKey, validationSummary, captureReason);
+        if (captureResult?.imageDataUrl) {
+          debugImageDataUrl = captureResult.imageDataUrl;
+          broadcastLog(`Auto debug screenshot captured (${captureResult.source || 'live'}).`);
+          stuckHint += '\n\nDEBUG: A fresh screenshot of the current stuck modal is attached. Inspect the red validation error and choose the action that fixes that exact field before clicking Review/Next.';
+        } else {
+          broadcastLog('Auto debug capture attempted but no frame was available.', true);
+        }
+        if (validationSummary) {
+          stuckHint += `\n\nDEBUG_VALIDATION_SUMMARY: ${validationSummary}`;
+        }
+      }
+    }
+
     // 3. Ask LLM or auto-recover when stuck
     let decision = null;
     if (repeatedActionDetected || pageIsStagnant) {
@@ -331,11 +397,17 @@ async function runAgentLoop() {
     }
 
     if (!decision) {
-      decision = await callLLM(snapshot, stuckHint + resumeAutoSelectedHint);
+      decision = await callLLM(snapshot, stuckHint + resumeAutoSelectedHint, debugImageDataUrl);
     }
 
     broadcastLog(`LLM: ${decision.reasoning}`);
     broadcastLog(`Action: ${decision.action} → ${decision.elementId || 'N/A'} ${decision.value ? '(val: ' + decision.value + ')' : ''}`);
+
+    if (isProgressClickDecision(decision, snapshot)) {
+      progressClickStreak += 1;
+    } else if (decision.action !== 'wait') {
+      progressClickStreak = 0;
+    }
     
     // Track action for stuck detection
     const actionKey = `${decision.action}:${decision.elementId}:${decision.value}`;
@@ -389,6 +461,12 @@ async function runAgentLoop() {
     }
 
     if (decision.action !== 'wait') {
+      if (!isOutreach && !resumeSelectionCommitted && isProgressClickDecision(decision, snapshot)) {
+        broadcastLog('Blocked progress button click because resume selection is not committed yet. Retrying resume step.', true);
+        setTimeout(runAgentLoop, 1500);
+        return;
+      }
+
       // Guard: in post outreach mode, skip any click on Easy Apply or job-apply elements
       if (settings.mode === 'post_outreach') {
         const blockedText = /easy apply|apply now|submit application/i;
@@ -515,6 +593,100 @@ function parseActionKey(actionKey) {
   const elementId = actionKey.slice(firstColon + 1, lastColon);
   const value = actionKey.slice(lastColon + 1);
   return { action, elementId, value };
+}
+
+function isRepeatedProgressAction(snapshot, actionKey) {
+  const parsed = parseActionKey(actionKey);
+  if (!parsed || parsed.action !== 'click') return false;
+  const target = (snapshot?.elements || []).find((el) => el.id === parsed.elementId);
+  return isPrimaryProgressButton(target);
+}
+
+function isProgressClickDecision(decision, snapshot) {
+  if (decision?.action !== 'click') return false;
+  const target = (snapshot?.elements || []).find((el) => el.id === decision.elementId);
+  return isPrimaryProgressButton(target);
+}
+
+function getValidationSummaryFromRawText(rawText = '') {
+  const block = String(rawText || '')
+    .split('FORM_VALIDATION_ERRORS:\n')[1]
+    ?.split('\n\n')[0]
+    ?.trim();
+  if (!block) return '';
+  return block
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' | ');
+}
+
+function updateValidationSummaryStreak(validationSummary = '') {
+  const key = String(validationSummary || '').trim();
+  if (!key) {
+    lastValidationSummaryKey = '';
+    validationSummaryStreak = 0;
+    return 0;
+  }
+
+  if (key === lastValidationSummaryKey) {
+    validationSummaryStreak += 1;
+  } else {
+    lastValidationSummaryKey = key;
+    validationSummaryStreak = 1;
+  }
+
+  return validationSummaryStreak;
+}
+
+function buildAutoDebugCaptureSignature(snapshot, repeatedActionKey, validationSummary) {
+  const raw = `${snapshot?.url || ''}|${repeatedActionKey || ''}|${validationSummary || ''}`;
+  return raw.slice(0, 500);
+}
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+async function maybeCaptureAutoDebugSnapshot(snapshot, repeatedActionKey, validationSummary = '', reason = 'stuck loop') {
+  const signature = buildAutoDebugCaptureSignature(snapshot, repeatedActionKey, validationSummary);
+  const now = Date.now();
+  if (
+    signature &&
+    signature === lastAutoDebugCaptureSignature &&
+    now - lastAutoDebugCaptureAt < AUTO_DEBUG_CAPTURE_COOLDOWN_MS
+  ) {
+    return null;
+  }
+
+  try {
+    const response = await sendRuntimeMessage({
+      action: 'agent_debug_capture',
+      reason,
+      validationSummary,
+      url: snapshot?.url || '',
+    });
+
+    if (response?.success) {
+      lastAutoDebugCaptureSignature = signature;
+      lastAutoDebugCaptureAt = now;
+      return response;
+    }
+
+    return null;
+  } catch (error) {
+    broadcastLog(`Auto debug capture failed: ${error.message}`, true);
+    return null;
+  }
 }
 
 function isPlaceholderFieldValue(value) {
@@ -679,11 +851,12 @@ function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
 
 // ---- LLM Provider Abstraction ----
 
-async function callLLM(snapshot, stuckHint = '') {
+async function callLLM(snapshot, stuckHint = '', debugImageDataUrl = '') {
   // Extract an explicit resume preference from the user's goal (e.g. "with my product resume" → "product").
   const goalText = (settings.userGoal || settings.searchQuery || '').toLowerCase();
   const resumeHintMatch = goalText.match(/\b(\w+)\s+resume\b/i);
   const resumeKeyword = resumeHintMatch?.[1]?.toLowerCase() || null;
+  const preferredResumeName = settings?.selectedResume?.file_name || '';
 
   // Job-title tokens for fallback resume matching.
   const titleTokens = (settings.searchQuery || '')
@@ -691,9 +864,11 @@ async function callLLM(snapshot, stuckHint = '') {
     .split(/\s+/)
     .filter((t) => t.length > 2);
 
-  const resumeContextLine = resumeKeyword
-    ? `\nRESUME PREFERENCE: The user wants to use their "${resumeKeyword}" resume — when LinkedIn shows a resume list, pick the file whose name contains "${resumeKeyword}".`
-    : '';
+  const resumeContextLine = preferredResumeName
+    ? `\nRESUME PREFERENCE: Use this exact resume file when available: "${preferredResumeName}".`
+    : resumeKeyword
+      ? `\nRESUME PREFERENCE: The user wants to use their "${resumeKeyword}" resume — when LinkedIn shows a resume list, pick the file whose name contains "${resumeKeyword}".`
+      : '';
 
   const pageTextLimit = settings.mode === 'post_outreach' ? 3000 : 1500;
   const pageTextPreview = snapshot.rawText.substring(0, pageTextLimit);
@@ -728,7 +903,17 @@ async function callLLM(snapshot, stuckHint = '') {
     'PO-13. Keep scrolling and repeating this read -> match -> engage/skip loop continuously until user stops the agent.',
   ].join('\n');
 
-  const resumeRule = resumeKeyword
+  const resumeRule = preferredResumeName
+    ? [
+        '20. RESUME SELECTION (HARD RULE — NEVER SKIP):',
+        '    When page text contains "RESUME_STEP_DETECTED", follow these steps IN ORDER:',
+        '    a) If you see a "Show N more resumes" or "Show more" button, click it NOW and STOP. Do nothing else this turn.',
+        `    b) After ALL resumes are visible: Find the resume whose filename best matches "${preferredResumeName}".`,
+        `    c) If the currently checked=true resume is not "${preferredResumeName}", switch to the matching one.`,
+        '    d) Only AFTER the correct resume shows checked=true, click "Next" / "Review".',
+        '    e) NEVER click Next while the wrong resume is selected.',
+      ].join('\n')
+    : resumeKeyword
     ? [
         '20. RESUME SELECTION (HARD RULE — NEVER SKIP):',
         '    When page text contains "RESUME_STEP_DETECTED", follow these steps IN ORDER:',
@@ -806,26 +991,44 @@ async function callLLM(snapshot, stuckHint = '') {
     '',
     'Respond with ONLY a JSON object:',
     '{"action": "...", "elementId": "...", "value": "...", "reasoning": "..."}',
+    debugImageDataUrl
+      ? '\nDEBUG IMAGE: A screenshot of the current stuck modal is attached. Use it to identify the exact invalid field and fix it.'
+      : '',
   ].join('\n');
 
   if (settings.provider === 'anthropic') {
-    return callAnthropic(prompt);
+    return callAnthropic(prompt, debugImageDataUrl);
   } else if (settings.provider === 'gemini') {
-    return callGemini(prompt);
+    return callGemini(prompt, debugImageDataUrl);
   } else {
-    return callOpenAICompat(prompt);
+    return callOpenAICompat(prompt, debugImageDataUrl);
   }
 }
 
-async function callGemini(prompt) {
+async function callGemini(prompt, debugImageDataUrl = '') {
   const model = settings.model || 'gemini-3.1-flash-lite-preview';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
+  const parts = [{ text: prompt }];
+
+  if (debugImageDataUrl) {
+    const mimeMatch = String(debugImageDataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
+    const mimeType = mimeMatch?.[1] || 'image/jpeg';
+    const base64Data = String(debugImageDataUrl).replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
+    if (base64Data) {
+      parts.push({
+        inlineData: {
+          mimeType,
+          data: base64Data,
+        },
+      });
+    }
+  }
   
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts }],
       generationConfig: {
         responseMimeType: "application/json"
       }
@@ -846,8 +1049,13 @@ async function callGemini(prompt) {
   }
 
   const data = await res.json();
-  const content = data.candidates[0].content.parts[0].text;
+  const responseParts = data?.candidates?.[0]?.content?.parts || [];
+  const content = responseParts.find((part) => typeof part?.text === 'string')?.text || '';
   const usage = data.usageMetadata;
+
+  if (!content) {
+    throw new Error('Gemini API Error: empty response content');
+  }
 
   if (usage) {
     await recordUsageToBackend({
@@ -872,9 +1080,27 @@ async function callGemini(prompt) {
   }
 }
 
-async function callAnthropic(prompt) {
+async function callAnthropic(prompt, debugImageDataUrl = '') {
   const baseUrl = settings.baseUrl || ANTHROPIC_DEFAULT_URL;
   const model = settings.model || 'claude-3-5-sonnet-20241022';
+  const messageContent = [{ type: 'text', text: prompt }];
+
+  if (debugImageDataUrl) {
+    const mimeMatch = String(debugImageDataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
+    const mediaType = mimeMatch?.[1] || 'image/jpeg';
+    const base64Data = String(debugImageDataUrl).replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
+    if (base64Data) {
+      messageContent.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: mediaType,
+          data: base64Data,
+        },
+      });
+    }
+  }
+
   const res = await fetch(`${baseUrl}/v1/messages`, {
     method: 'POST',
     headers: {
@@ -886,7 +1112,7 @@ async function callAnthropic(prompt) {
     body: JSON.stringify({
       model,
       max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }]
+      messages: [{ role: 'user', content: messageContent }]
     })
   });
 
@@ -896,8 +1122,14 @@ async function callAnthropic(prompt) {
   }
 
   const data = await res.json();
-  const content = data.content[0].text;
+  const content = Array.isArray(data.content)
+    ? (data.content.find((part) => part?.type === 'text')?.text || '')
+    : '';
   const usage = data.usage;
+
+  if (!content) {
+    throw new Error('Anthropic API Error: empty response content');
+  }
 
   if (usage) {
     await recordUsageToBackend({
@@ -917,21 +1149,54 @@ async function callAnthropic(prompt) {
   return JSON.parse(jsonMatch[1]);
 }
 
-async function callOpenAICompat(prompt) {
+async function callOpenAICompat(prompt, debugImageDataUrl = '') {
   const baseUrl = settings.baseUrl || OPENAI_DEFAULT_URL;
   const model = settings.model || 'gpt-4o';
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${settings.apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
+  const headers = {
+    'Authorization': `Bearer ${settings.apiKey}`,
+    'Content-Type': 'application/json'
+  };
+
+  const buildPayload = (includeImage) => {
+    const content = includeImage && debugImageDataUrl
+      ? [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: debugImageDataUrl } },
+        ]
+      : prompt;
+    return {
       model,
-      messages: [{ role: 'user', content: prompt }],
-      response_format: { type: "json_object" }
-    })
+      messages: [{ role: 'user', content }],
+      response_format: { type: 'json_object' }
+    };
+  };
+
+  let includeImage = Boolean(debugImageDataUrl);
+  let res = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(buildPayload(includeImage))
   });
+
+  if (!res.ok && includeImage) {
+    const firstErr = await res.text();
+    const normalized = firstErr.toLowerCase();
+    if (
+      normalized.includes('image') ||
+      normalized.includes('vision') ||
+      normalized.includes('unsupported') ||
+      normalized.includes('invalid content')
+    ) {
+      includeImage = false;
+      res = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(buildPayload(false))
+      });
+    } else {
+      throw new Error(`OpenAI API Error: ${firstErr}`);
+    }
+  }
 
   if (!res.ok) {
     const err = await res.text();

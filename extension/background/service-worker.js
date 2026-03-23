@@ -16,6 +16,8 @@ let debugLogs = [];
 let agentLogs = [];
 let lastCapturedAgentFrame = null;
 let lastCapturedAgentFrameAt = 0;
+let captureInFlightPromise = null;
+let lastCaptureFailureLogAt = 0;
 
 function appendAgentLog(message, isError = false) {
   agentLogs.push({ message, isError, timestamp: Date.now() });
@@ -163,7 +165,12 @@ async function captureTabViaDebugger(tabId) {
     const data = screenshot?.data;
     if (!data) return null;
     return `data:image/jpeg;base64,${data}`;
-  } catch {
+  } catch (error) {
+    const now = Date.now();
+    if (now - lastCaptureFailureLogAt > 30000) {
+      lastCaptureFailureLogAt = now;
+      emitAgentLog(`Debugger capture failed: ${error.message || 'unknown error'}`, true).catch(() => {});
+    }
     return null;
   } finally {
     if (attached) {
@@ -186,14 +193,66 @@ async function uploadFrameToEndpoint(dataUrl, endpointPath) {
 }
 
 async function captureAgentFrame() {
-  const tab = await getPreferredLinkedInTab();
-  if (!tab) return null;
+  if (captureInFlightPromise) {
+    return captureInFlightPromise;
+  }
 
-  const visibleCapture = await captureTabWindow(tab);
-  if (visibleCapture) return visibleCapture;
+  captureInFlightPromise = (async () => {
+    const tab = await getPreferredLinkedInTab();
+    if (!tab) return null;
 
-  // Fallback: capture directly from the target tab even when it is not the visible tab.
-  return captureTabViaDebugger(tab.id);
+    const visibleCapture = await captureTabWindow(tab);
+    if (visibleCapture) return visibleCapture;
+
+    // Fallback: capture directly from the target tab even when it is not the visible tab.
+    return captureTabViaDebugger(tab.id);
+  })();
+
+  try {
+    return await captureInFlightPromise;
+  } finally {
+    captureInFlightPromise = null;
+  }
+}
+
+async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '' } = {}) {
+  const liveFrame = await captureAgentFrame();
+  let source = 'live';
+  let dataUrl = liveFrame;
+
+  if (!dataUrl && lastCapturedAgentFrame) {
+    dataUrl = lastCapturedAgentFrame;
+    source = 'cached';
+  }
+
+  if (!dataUrl) {
+    return { success: false, error: 'no_frame_available' };
+  }
+
+  lastCapturedAgentFrame = dataUrl;
+  lastCapturedAgentFrameAt = Date.now();
+
+  const uploaded = await uploadFrameToEndpoint(dataUrl, '/agent/screenshot');
+  await uploadFrameToEndpoint(dataUrl, '/agent/capture');
+
+  const details = [];
+  const compactSummary = String(validationSummary || '')
+    .replace(/[`*_{}\[\]()#+\-.!|>~]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180);
+  if (reason) details.push(`reason=${reason}`);
+  if (compactSummary) details.push(`errors=${compactSummary}`);
+  const suffix = details.length ? ` | ${details.join(' | ')}` : '';
+
+  emitAgentLog(`Auto debug screenshot ${uploaded ? 'sent' : 'captured'} (${source})${suffix}.`, !uploaded).catch(() => {});
+
+  return {
+    success: true,
+    uploaded,
+    source,
+    imageDataUrl: dataUrl,
+  };
 }
 
 async function captureAndUploadFrame(trigger = 'interval') {
@@ -416,6 +475,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === 'get_agent_logs') {
     sendResponse({ success: true, logs: agentLogs });
+    return true;
+  } else if (message.action === 'agent_debug_capture') {
+    (async () => {
+      const result = await pushDebugCaptureToTelegram({
+        reason: String(message.reason || ''),
+        validationSummary: String(message.validationSummary || ''),
+      });
+      sendResponse(result);
+    })().catch((error) => {
+      sendResponse({ success: false, error: error.message });
+    });
     return true;
   } else if (message.action === 'agent_log') {
     appendAgentLog(message.message, message.isError);

@@ -1274,7 +1274,34 @@ async function commitResumeSelection(card) {
   return false;
 }
 
-async function autoSelectBestResume(resumeKeyword, titleTokens) {
+function normalizeResumeName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function scoreResumeNameMatch(candidateName, preferredName) {
+  const candidate = normalizeResumeName(candidateName);
+  const preferred = normalizeResumeName(preferredName);
+  if (!candidate || !preferred) return 0;
+  if (candidate === preferred) return 1000;
+  if (candidate.includes(preferred) || preferred.includes(candidate)) return 800;
+
+  const candidateTokens = new Set(candidate.split(/\s+/).filter((t) => t.length > 1));
+  const preferredTokens = preferred.split(/\s+/).filter((t) => t.length > 1);
+  if (!candidateTokens.size || !preferredTokens.length) return 0;
+
+  let overlap = 0;
+  for (const token of preferredTokens) {
+    if (candidateTokens.has(token)) overlap += 1;
+  }
+
+  return overlap > 0 ? overlap * 10 : 0;
+}
+
+async function autoSelectBestResume(preferredResumeName, resumeKeyword, titleTokens) {
   const modal = getEasyApplyModal();
   if (!modal) return { changed: false, reason: 'no modal' };
 
@@ -1295,7 +1322,9 @@ async function autoSelectBestResume(resumeKeyword, titleTokens) {
     modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment')
   ).filter(c => isElementVisible(c));
 
-  if (!resumeCards.length) return { changed: false, reason: 'no resume cards found' };
+  if (!resumeCards.length) {
+    return { changed: false, reason: 'no resume cards found', selectionCommitted: false };
+  }
 
   // Step 3: Build keyword list
   const keywords = [];
@@ -1307,11 +1336,13 @@ async function autoSelectBestResume(resumeKeyword, titleTokens) {
     }
   }
 
-  // Step 4: Score each resume card by keyword overlap; break ties with "Last used" date
+  // Step 4: Evaluate cards and track current selection state.
   let bestCard = null;
   let bestScore = -1;
   let bestLastUsed = 0;
   let currentlySelectedCard = null;
+  let preferredBestCard = null;
+  let preferredBestScore = 0;
 
   for (const card of resumeCards) {
     const nameEl = card.querySelector(
@@ -1320,9 +1351,17 @@ async function autoSelectBestResume(resumeKeyword, titleTokens) {
     const name = (nameEl?.textContent || '').trim();
     const nameLower = name.toLowerCase();
     const radio = card.querySelector('input[type="radio"], input[type="checkbox"]');
+    const committed = isResumeCardCommitted(card, modal);
+    const checked = Boolean(radio && radio.checked);
 
-    if (isResumeCardCommitted(card, modal)) {
-      currentlySelectedCard = { card, name, radio };
+    if (checked || committed) {
+      currentlySelectedCard = { card, name, radio, committed };
+    }
+
+    const preferredScore = scoreResumeNameMatch(name, preferredResumeName);
+    if (preferredScore > preferredBestScore) {
+      preferredBestScore = preferredScore;
+      preferredBestCard = { card, name, radio, committed, preferredScore };
     }
 
     let score = 0;
@@ -1340,29 +1379,59 @@ async function autoSelectBestResume(resumeKeyword, titleTokens) {
     if (score > bestScore || (score === bestScore && lastUsed > bestLastUsed)) {
       bestScore = score;
       bestLastUsed = lastUsed;
-      bestCard = { card, name, radio, score };
+      bestCard = { card, name, radio, score, committed };
     }
   }
 
-  if (!bestCard || bestScore <= 0) {
-    postAgentLog(`No resume matched keywords [${keywords.join(', ')}]. Keeping current selection.`);
-    return { changed: false, reason: 'no keyword match' };
+  const targetCard = preferredBestCard && preferredBestScore > 0 ? preferredBestCard : bestCard;
+  const targetType = preferredBestCard && preferredBestScore > 0 ? 'preferred_name' : 'keyword';
+  const targetScore = preferredBestCard && preferredBestScore > 0 ? preferredBestScore : bestScore;
+
+  if (!targetCard || targetScore <= 0) {
+    const selectedCommitted = Boolean(currentlySelectedCard?.committed);
+    if (selectedCommitted && currentlySelectedCard?.name) {
+      postAgentLog(`No better resume match found. Keeping committed selection "${currentlySelectedCard.name}".`);
+    } else {
+      postAgentLog(
+        `No resume matched preferred="${preferredResumeName || 'n/a'}" or keywords [${keywords.join(', ')}].`,
+        true
+      );
+    }
+    return {
+      changed: false,
+      reason: 'no deterministic match',
+      selectedName: currentlySelectedCard?.name || '',
+      selectionCommitted: selectedCommitted,
+    };
   }
 
-  if (currentlySelectedCard && currentlySelectedCard.card === bestCard.card) {
-    postAgentLog(`Best resume "${bestCard.name}" is already selected.`);
-    return { changed: false, reason: 'already correct' };
+  if (currentlySelectedCard && currentlySelectedCard.card === targetCard.card) {
+    if (currentlySelectedCard.committed) {
+      postAgentLog(`Best resume "${targetCard.name}" is already selected and committed (${targetType}).`);
+      return { changed: false, reason: 'already correct', selectedName: targetCard.name, selectionCommitted: true };
+    }
+    postAgentLog(`Resume "${targetCard.name}" is checked but not committed. Re-confirming selection...`);
+    const recommitted = await commitResumeSelection(targetCard.card);
+    return {
+      changed: false,
+      reason: recommitted ? 'reconfirmed current selection' : 'selection did not commit',
+      selectedName: targetCard.name,
+      selectionCommitted: recommitted,
+    };
   }
 
-  postAgentLog(`Selecting resume "${bestCard.name}" (score: ${bestScore}) for keywords [${keywords.join(', ')}]`);
-  const committed = await commitResumeSelection(bestCard.card);
+  postAgentLog(
+    `Selecting resume "${targetCard.name}" (${targetType}, score: ${targetScore})` +
+    `${targetType === 'keyword' ? ` for keywords [${keywords.join(', ')}]` : ''}`
+  );
+  const committed = await commitResumeSelection(targetCard.card);
   if (!committed) {
-    postAgentLog(`Resume "${bestCard.name}" still does not look committed after selection attempt.`, true);
-    return { changed: false, reason: 'selection did not commit', selectedName: bestCard.name };
+    postAgentLog(`Resume "${targetCard.name}" still does not look committed after selection attempt.`, true);
+    return { changed: false, reason: 'selection did not commit', selectedName: targetCard.name, selectionCommitted: false };
   }
-  postAgentLog(`Resume "${bestCard.name}" is now committed for this application step.`);
+  postAgentLog(`Resume "${targetCard.name}" is now committed for this application step.`);
 
-  return { changed: true, selectedName: bestCard.name };
+  return { changed: true, selectedName: targetCard.name, selectionCommitted: true };
 }
 
 function buildDOMSnapshot() {
@@ -1607,7 +1676,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'auto_select_resume') {
-    autoSelectBestResume(message.resumeKeyword, message.titleTokens).then((result) => {
+    autoSelectBestResume(message.preferredResumeName, message.resumeKeyword, message.titleTokens).then((result) => {
       sendResponse(result);
     });
     return true;
