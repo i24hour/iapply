@@ -290,7 +290,8 @@ async function captureAndUploadFrame(trigger = 'interval') {
     const dataUrl = await captureAgentFrame({ allowDebugger });
 
     if (!dataUrl) {
-      if (trigger !== 'interval') {
+      const shouldNotifyNoFrame = trigger === 'manual' || trigger === 'debug';
+      if (shouldNotifyNoFrame) {
         if (lastCapturedAgentFrame) {
           emitAgentLog('Live frame unavailable right now. Sending latest cached agent frame without switching tabs.').catch(() => {});
         } else {

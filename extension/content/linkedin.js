@@ -1200,11 +1200,23 @@ function listModalValidationIssues() {
 }
 
 async function autoFixModalValidationIssues() {
-  const issues = listModalValidationIssues();
-  if (!issues.length) return { fixed: 0, remaining: 0, details: [] };
-
   let fixed = 0;
   const details = [];
+  const modal = getEasyApplyModal();
+
+  if (modal && hasResumeRequirementError(modal)) {
+    const resolvedResume = await resolveResumeRequirementError(modal);
+    if (resolvedResume) {
+      fixed++;
+      details.push('Resolved resume selection requirement');
+      postAgentLog('Resolved "A resume is required" by re-committing resume selection.');
+    } else {
+      postAgentLog('Resume requirement is still unresolved after deterministic resume re-selection.', true);
+    }
+  }
+
+  const issues = listModalValidationIssues();
+  if (!issues.length) return { fixed, remaining: 0, details };
 
   for (const issue of issues) {
     const { field, tag, type, label } = issue;
@@ -1284,9 +1296,93 @@ function isPrimaryApplyActionButton(el) {
 // HARDCODED RESUME SELECTION (deterministic)
 // ==========================================
 
+function getVisibleResumeCards(modal = getEasyApplyModal()) {
+  if (!modal) return [];
+  return Array.from(modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment')).filter((card) => isElementVisible(card));
+}
+
+function getResumeCardInput(card) {
+  return card?.querySelector('input[type="radio"], input[type="checkbox"]') || null;
+}
+
+function countCheckedResumeInputs(modal = getEasyApplyModal()) {
+  if (!modal) return 0;
+  const cards = getVisibleResumeCards(modal);
+  let checked = 0;
+  for (const card of cards) {
+    const input = getResumeCardInput(card);
+    if (input?.checked) checked += 1;
+  }
+  return checked;
+}
+
+function enforceSingleResumeSelection(modal, preferredCard) {
+  if (!modal || !preferredCard) return false;
+  const cards = getVisibleResumeCards(modal);
+  let preferredChecked = false;
+
+  for (const card of cards) {
+    const input = getResumeCardInput(card);
+    if (!input) continue;
+    const shouldCheck = card === preferredCard;
+    if (Boolean(input.checked) !== shouldCheck) {
+      input.checked = shouldCheck;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (shouldCheck && input.checked) {
+      preferredChecked = true;
+    }
+  }
+
+  return preferredChecked;
+}
+
 function hasResumeRequirementError(modal = getEasyApplyModal()) {
   if (!modal) return false;
   return /resume is required/i.test(modal.innerText || '');
+}
+
+async function resolveResumeRequirementError(modal = getEasyApplyModal()) {
+  if (!modal || !hasResumeRequirementError(modal)) return false;
+
+  await revealAllResumeOptions(modal);
+  const cards = getVisibleResumeCards(modal);
+  if (!cards.length) return false;
+
+  let primary = cards.find((card) => isResumeCardCommitted(card, modal)) ||
+    cards.find((card) => Boolean(card.querySelector('input[type="radio"]:checked, input[type="checkbox"]:checked'))) ||
+    cards[0];
+
+  let committed = await commitResumeSelection(primary);
+  if (!committed) {
+    enforceSingleResumeSelection(modal, primary);
+    committed = await commitResumeSelection(primary);
+  }
+  if (committed && !hasResumeRequirementError(modal)) {
+    return true;
+  }
+
+  if (cards.length > 1) {
+    const alternate = cards.find((card) => card !== primary);
+    if (alternate) {
+      await commitResumeSelection(alternate);
+      await sleep(220);
+      committed = await commitResumeSelection(primary);
+      if (committed && !hasResumeRequirementError(modal)) {
+        return true;
+      }
+    }
+  }
+
+  for (const card of cards) {
+    const done = await commitResumeSelection(card);
+    if (done && !hasResumeRequirementError(modal)) {
+      return true;
+    }
+  }
+
+  return !hasResumeRequirementError(modal);
 }
 
 function hasActiveResumeCardState(card) {
@@ -1307,37 +1403,41 @@ function hasActiveResumeCardState(card) {
 
   const style = window.getComputedStyle(card);
   const borderColor = (style.borderColor || '').toLowerCase();
-  const boxShadow = (style.boxShadow || '').toLowerCase();
 
   return (
     borderColor.includes('rgb(10') ||
     borderColor.includes('rgb(37') ||
     borderColor.includes('#0a') ||
-    borderColor.includes('#25') ||
-    boxShadow !== 'none'
+    borderColor.includes('#25')
   );
 }
 
 function isResumeCardCommitted(card, modal = getEasyApplyModal()) {
   if (!card) return false;
-  const radio = card.querySelector('input[type="radio"], input[type="checkbox"]');
+  const radio = getResumeCardInput(card);
   const radioChecked = Boolean(radio && radio.checked);
   if (!radioChecked) return false;
 
-  return hasActiveResumeCardState(card) || !hasResumeRequirementError(modal);
+  const checkedCount = countCheckedResumeInputs(modal);
+  if (checkedCount > 1) return false;
+
+  return hasActiveResumeCardState(card) || (!hasResumeRequirementError(modal) && checkedCount === 1);
 }
 
 async function commitResumeSelection(card) {
   const modal = getEasyApplyModal();
   if (!modal || !card) return false;
 
-  const radio = card.querySelector('input[type="radio"], input[type="checkbox"]');
+  const radio = getResumeCardInput(card);
   const attempts = [card, radio, card].filter(Boolean);
 
   for (const target of attempts) {
-    await humanClick(target);
+    await forceClickElement(target);
     if (radio) {
-      radio.checked = true;
+      enforceSingleResumeSelection(modal, card);
+      if (!radio.checked) {
+        radio.checked = true;
+      }
       radio.dispatchEvent(new Event('input', { bubbles: true }));
       radio.dispatchEvent(new Event('change', { bubbles: true }));
       radio.dispatchEvent(new Event('click', { bubbles: true }));

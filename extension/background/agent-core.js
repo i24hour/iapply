@@ -23,10 +23,12 @@ let validationSummaryStreak = 0;
 let lastValidationSummaryKey = '';
 let pendingProgressSnapshotSignature = '';
 let progressNoAdvanceCount = 0;
+let progressTransitionLock = null;
 const MAX_STEPS = 50;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
 const STAGNATION_WINDOW = 4;
 const AUTO_DEBUG_CAPTURE_COOLDOWN_MS = 60000;
+const PROGRESS_TRANSITION_LOCK_TIMEOUT_MS = 12000;
 
 // Constants
 const API_URL = 'https://iapply-telegram-bot.onrender.com';
@@ -112,6 +114,7 @@ export async function startAgent(config) {
   lastValidationSummaryKey = '';
   pendingProgressSnapshotSignature = '';
   progressNoAdvanceCount = 0;
+  progressTransitionLock = null;
 
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
   if (settings.selectedResume) {
@@ -179,6 +182,7 @@ export function stopAgent() {
   lastValidationSummaryKey = '';
   pendingProgressSnapshotSignature = '';
   progressNoAdvanceCount = 0;
+  progressTransitionLock = null;
   broadcastLog('Stopped by user.');
   updateTaskStatus('stopped');
   completeAutomationSession();
@@ -331,16 +335,28 @@ async function runAgentLoop() {
     }
 
     const validationSummary = !isOutreach ? getValidationSummaryFromRawText(snapshot.rawText) : '';
+    const currentProgressStepSignature = !isOutreach ? buildProgressStepSignature(snapshot, validationSummary) : '';
     if (!isOutreach) {
       updateValidationSummaryStreak(validationSummary);
       if (pendingProgressSnapshotSignature) {
-        const currentProgressSig = buildProgressStepSignature(snapshot, validationSummary);
-        if (currentProgressSig === pendingProgressSnapshotSignature) {
+        if (currentProgressStepSignature === pendingProgressSnapshotSignature) {
           progressNoAdvanceCount += 1;
         } else {
           progressNoAdvanceCount = 0;
         }
         pendingProgressSnapshotSignature = '';
+      }
+
+      if (progressTransitionLock?.active) {
+        const changed = progressTransitionLock.signature !== currentProgressStepSignature;
+        const expired = Date.now() - progressTransitionLock.startedAt > PROGRESS_TRANSITION_LOCK_TIMEOUT_MS;
+        if (changed) {
+          broadcastLog('Progress transition acknowledged. Allowing next progress click.');
+          progressTransitionLock = null;
+        } else if (expired) {
+          broadcastLog('Progress transition lock timed out. Allowing retry on progress button.', true);
+          progressTransitionLock = null;
+        }
       }
     }
 
@@ -399,6 +415,7 @@ async function runAgentLoop() {
         if (captureResult?.imageDataUrl) {
           debugImageDataUrl = captureResult.imageDataUrl;
           broadcastLog(`Auto debug screenshot captured (${captureResult.source || 'live'}).`);
+          broadcastLog(`DEBUG_IMAGE_READY: sending screenshot to ${settings.provider || 'llm'} (${settings.model || 'default model'}).`);
           stuckHint += '\n\nDEBUG: A fresh screenshot of the current stuck modal is attached. Inspect the red validation error and choose the action that fixes that exact field before clicking Review/Next.';
         } else {
           broadcastLog('Auto debug capture attempted but no frame was available.', true);
@@ -411,7 +428,7 @@ async function runAgentLoop() {
 
     // 3. Ask LLM or auto-recover when stuck
     let decision = null;
-    const shouldAskLLMWithDebug = Boolean(debugImageDataUrl) && (Boolean(validationSummary) || progressNoAdvanceCount >= 3);
+    const shouldAskLLMWithDebug = Boolean(debugImageDataUrl);
     if ((repeatedActionDetected || pageIsStagnant) && !shouldAskLLMWithDebug) {
       decision = chooseRecoveryDecision(snapshot, repeatedActionKey);
       if (decision) {
@@ -421,6 +438,10 @@ async function runAgentLoop() {
 
     if (!decision) {
       decision = await callLLM(snapshot, stuckHint + resumeAutoSelectedHint, debugImageDataUrl);
+    }
+
+    if (debugImageDataUrl) {
+      broadcastLog(`DEBUG_IMAGE_USED: LLM decision was requested with screenshot context.`);
     }
 
     broadcastLog(`LLM: ${decision.reasoning}`);
@@ -487,6 +508,27 @@ async function runAgentLoop() {
     }
 
     if (decision.action !== 'wait') {
+      const isProgressDecision = !isOutreach && isProgressClickDecision(decision, snapshot);
+
+      if (
+        isProgressDecision &&
+        progressTransitionLock?.active &&
+        progressTransitionLock.signature === currentProgressStepSignature
+      ) {
+        progressClickStreak = Math.max(0, progressClickStreak - 1);
+        pendingProgressSnapshotSignature = '';
+        if (lastActions.length > 0) {
+          lastActions.pop();
+        }
+        progressNoAdvanceCount += 1;
+        broadcastLog(
+          `Progress lock active: waiting for step transition before another "${decision.action}" on Next/Review. Blocked attempt ${progressNoAdvanceCount}.`,
+          true,
+        );
+        setTimeout(runAgentLoop, 1200);
+        return;
+      }
+
       if (!isOutreach && !resumeSelectionCommitted && isProgressClickDecision(decision, snapshot)) {
         broadcastLog('Blocked progress button click because resume selection is not committed yet. Retrying resume step.', true);
         setTimeout(runAgentLoop, 1500);
@@ -510,6 +552,16 @@ async function runAgentLoop() {
         }
       }
       await executeActionInActiveTab(decision);
+
+      if (isProgressDecision) {
+        progressTransitionLock = {
+          active: true,
+          signature: currentProgressStepSignature,
+          startedAt: Date.now(),
+        };
+      } else {
+        progressTransitionLock = null;
+      }
     }
     
     // 4. Loop with human delay
@@ -649,13 +701,16 @@ function getValidationSummaryFromRawText(rawText = '') {
 }
 
 function buildProgressStepSignature(snapshot, validationSummary = '') {
-  const raw = String(snapshot?.rawText || '')
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
-  const modalPreview = raw.slice(0, 900);
+  const raw = String(snapshot?.rawText || '').replace(/\s+/g, ' ').toLowerCase();
   const progressMatch = raw.match(/(\d{1,3})\s*%/);
   const progressMarker = progressMatch?.[1] || '';
-  return `${snapshot?.url || ''}|${progressMarker}|${String(validationSummary || '').toLowerCase()}|${modalPreview}`;
+  const resumeBlock = raw.split('resume_step_detected:')[1]?.split('form_validation_errors:')[0] || '';
+  const modalPreview = raw.slice(0, 420);
+  const dominantSection =
+    /contact info|additional questions|resume|work experience|education|privacy policy|review your application|application questions/.exec(raw)?.[0] || '';
+  const validation = String(validationSummary || '').toLowerCase();
+  const resumePreview = resumeBlock.slice(0, 450);
+  return `${snapshot?.url || ''}|${progressMarker}|${dominantSection}|${validation}|${resumePreview || modalPreview}`;
 }
 
 function updateValidationSummaryStreak(validationSummary = '') {
@@ -1045,12 +1100,16 @@ async function callGemini(prompt, debugImageDataUrl = '') {
   const model = settings.model || 'gemini-3.1-flash-lite-preview';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
   const parts = [{ text: prompt }];
+  let debugImageAttached = false;
+  let debugImageBytes = 0;
 
   if (debugImageDataUrl) {
     const mimeMatch = String(debugImageDataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
     const mimeType = mimeMatch?.[1] || 'image/jpeg';
     const base64Data = String(debugImageDataUrl).replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
     if (base64Data) {
+      debugImageAttached = true;
+      debugImageBytes = Math.round((base64Data.length * 3) / 4);
       parts.push({
         inlineData: {
           mimeType,
@@ -1070,6 +1129,10 @@ async function callGemini(prompt, debugImageDataUrl = '') {
       }
     })
   });
+
+  if (debugImageAttached) {
+    broadcastLog(`Gemini multimodal request sent with debug image (~${Math.max(1, Math.round(debugImageBytes / 1024))} KB).`);
+  }
 
   if (!res.ok) {
     const err = await res.text();
