@@ -428,6 +428,46 @@ async function humanClick(element) {
   }
 }
 
+function getClickableContainer(element) {
+  if (!element) return null;
+  return element.closest?.('button, label, [role="button"], [role="checkbox"], .jobs-document-upload-redesign-card, .ui-attachment') || element;
+}
+
+function isShowMoreResumesButton(element) {
+  if (!element) return false;
+  const text = normalizeText(element.innerText || element.textContent || element.getAttribute('aria-label') || '');
+  return text.includes('show') && text.includes('more') && text.includes('resume');
+}
+
+async function forceClickElement(element) {
+  const target = getClickableContainer(element);
+  if (!target) return false;
+
+  try {
+    await humanClick(target);
+  } catch (_error) {
+    // Continue with fallbacks.
+  }
+
+  try {
+    target.click();
+  } catch (_error) {
+    // Continue with keyboard fallback.
+  }
+
+  try {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+    target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', keyCode: 32, bubbles: true }));
+    target.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', keyCode: 32, bubbles: true }));
+  } catch (_error) {
+    // Keyboard events may be ignored by site handlers.
+  }
+
+  await sleep(120);
+  return true;
+}
+
 // Scrape job listings from LinkedIn
 async function scrapeJobs() {
   const jobs = [];
@@ -773,6 +813,27 @@ function isCheckboxChecked(field) {
   return checked === true;
 }
 
+function findAgreementCheckboxContainer(modal = getEasyApplyModal()) {
+  if (!modal) return null;
+
+  const checkboxInputs = Array.from(modal.querySelectorAll('input[type="checkbox"]'));
+  for (const input of checkboxInputs) {
+    const container = input.closest('label, .fb-dash-form-element, .jobs-easy-apply-form-section__grouping, [role="group"], .artdeco-form__element') || input.parentElement;
+    const text = normalizeText(container?.textContent || '');
+    if (
+      text.includes('i agree') ||
+      text.includes('terms') ||
+      text.includes('privacy') ||
+      text.includes('consent') ||
+      text.includes('select checkbox to proceed')
+    ) {
+      return container || input;
+    }
+  }
+
+  return null;
+}
+
 async function ensureCheckboxChecked(field) {
   if (!field) return false;
   if (isCheckboxChecked(field)) return true;
@@ -816,6 +877,23 @@ async function ensureCheckboxChecked(field) {
     }
 
     if (isCheckboxChecked(field)) {
+      return true;
+    }
+  }
+
+  const modal = getEasyApplyModal();
+  const agreementTarget = findAgreementCheckboxContainer(modal);
+  if (agreementTarget) {
+    await forceClickElement(agreementTarget);
+    const agreementInput = agreementTarget.querySelector?.('input[type="checkbox"]') || getCheckboxInput(field);
+    if (agreementInput && !agreementInput.checked) {
+      agreementInput.checked = true;
+      agreementInput.dispatchEvent(new Event('input', { bubbles: true }));
+      agreementInput.dispatchEvent(new Event('change', { bubbles: true }));
+      agreementInput.dispatchEvent(new Event('click', { bubbles: true }));
+    }
+    await sleep(120);
+    if (isCheckboxChecked(field) || (agreementInput && agreementInput.checked)) {
       return true;
     }
   }
@@ -1301,21 +1379,43 @@ function scoreResumeNameMatch(candidateName, preferredName) {
   return overlap > 0 ? overlap * 10 : 0;
 }
 
+function findShowMoreResumesButton(modal) {
+  if (!modal) return null;
+  return Array.from(modal.querySelectorAll('button, [role="button"]')).find((btn) => {
+    const text = normalizeText(btn.innerText || btn.textContent || btn.getAttribute('aria-label') || '');
+    return text.includes('show') && text.includes('more') && text.includes('resume');
+  }) || null;
+}
+
+async function revealAllResumeOptions(modal) {
+  if (!modal) return false;
+  let expanded = false;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const showMoreBtn = findShowMoreResumesButton(modal);
+    if (!showMoreBtn) break;
+
+    const beforeCount = modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment').length;
+    const label = (showMoreBtn.innerText || showMoreBtn.textContent || 'Show more resumes').trim();
+    postAgentLog(`Clicking "${label}" to reveal hidden resumes...`);
+    await forceClickElement(showMoreBtn);
+    await sleep(900);
+
+    const afterCount = modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment').length;
+    if (afterCount > beforeCount || !findShowMoreResumesButton(modal)) {
+      expanded = true;
+    }
+  }
+
+  return expanded;
+}
+
 async function autoSelectBestResume(preferredResumeName, resumeKeyword, titleTokens) {
   const modal = getEasyApplyModal();
   if (!modal) return { changed: false, reason: 'no modal' };
 
-  // Step 1: Click "Show more resumes" repeatedly until all are visible
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const showMoreBtn = Array.from(modal.querySelectorAll('button')).find(btn => {
-      const t = (btn.innerText || '').toLowerCase();
-      return isElementVisible(btn) && t.includes('show') && (t.includes('more') || t.includes('resume'));
-    });
-    if (!showMoreBtn) break;
-    postAgentLog(`Clicking "${showMoreBtn.innerText.trim()}" to reveal hidden resumes...`);
-    await humanClick(showMoreBtn);
-    await sleep(1000);
-  }
+  // Step 1: Reveal hidden resume cards aggressively before matching.
+  await revealAllResumeOptions(modal);
 
   // Step 2: Gather all visible resume cards
   const resumeCards = Array.from(
@@ -1553,6 +1653,20 @@ async function executeAgentAction(decision) {
 
   try {
     if (action === 'click') {
+      if (isShowMoreResumesButton(el)) {
+        await forceClickElement(el);
+        postAgentLog('Clicked "Show more resumes" using resilient click strategy.');
+        return;
+      }
+
+      if (isCheckboxLikeElement(el) || (el.tagName === 'INPUT' && (el.getAttribute('type') || '').toLowerCase() === 'checkbox')) {
+        const checked = await ensureCheckboxChecked(el);
+        if (checked) {
+          postAgentLog(`Checked checkbox for ${getFieldLabel(el) || 'required consent'}.`);
+          return;
+        }
+      }
+
       if (isPrimaryApplyActionButton(el)) {
         const fixResult = await autoFixModalValidationIssues();
         if (fixResult.fixed > 0) {

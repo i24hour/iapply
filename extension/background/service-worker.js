@@ -17,6 +17,7 @@ let agentLogs = [];
 let lastCapturedAgentFrame = null;
 let lastCapturedAgentFrameAt = 0;
 let captureInFlightPromise = null;
+let captureInFlightStartedAt = 0;
 let lastCaptureFailureLogAt = 0;
 
 function appendAgentLog(message, isError = false) {
@@ -84,6 +85,24 @@ async function emitAgentLog(message, isError = false) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout(promise, timeoutMs, label = 'operation') {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
 }
 
 function attachDebugger(target, version = '1.3') {
@@ -154,14 +173,14 @@ async function captureTabViaDebugger(tabId) {
   let attached = false;
 
   try {
-    await attachDebugger(target);
+    await withTimeout(attachDebugger(target), 3000, 'debugger.attach');
     attached = true;
-    await sendDebuggerCommand(target, 'Page.enable');
-    const screenshot = await sendDebuggerCommand(target, 'Page.captureScreenshot', {
+    await withTimeout(sendDebuggerCommand(target, 'Page.enable'), 3000, 'Page.enable');
+    const screenshot = await withTimeout(sendDebuggerCommand(target, 'Page.captureScreenshot', {
       format: 'jpeg',
       quality: 55,
       fromSurface: true,
-    });
+    }), 4000, 'Page.captureScreenshot');
     const data = screenshot?.data;
     if (!data) return null;
     return `data:image/jpeg;base64,${data}`;
@@ -174,7 +193,7 @@ async function captureTabViaDebugger(tabId) {
     return null;
   } finally {
     if (attached) {
-      await detachDebugger(target);
+      await withTimeout(detachDebugger(target), 2000, 'debugger.detach').catch(() => {});
     }
   }
 }
@@ -192,11 +211,18 @@ async function uploadFrameToEndpoint(dataUrl, endpointPath) {
   return response.ok;
 }
 
-async function captureAgentFrame() {
+async function captureAgentFrame({ allowDebugger = true } = {}) {
   if (captureInFlightPromise) {
-    return captureInFlightPromise;
+    if (Date.now() - captureInFlightStartedAt > 12000) {
+      captureInFlightPromise = null;
+      captureInFlightStartedAt = 0;
+      emitAgentLog('Previous capture attempt became stale. Resetting capture lock.', true).catch(() => {});
+    } else {
+      return captureInFlightPromise;
+    }
   }
 
+  captureInFlightStartedAt = Date.now();
   captureInFlightPromise = (async () => {
     const tab = await getPreferredLinkedInTab();
     if (!tab) return null;
@@ -204,19 +230,22 @@ async function captureAgentFrame() {
     const visibleCapture = await captureTabWindow(tab);
     if (visibleCapture) return visibleCapture;
 
+    if (!allowDebugger) return null;
+
     // Fallback: capture directly from the target tab even when it is not the visible tab.
     return captureTabViaDebugger(tab.id);
   })();
 
   try {
-    return await captureInFlightPromise;
+    return await withTimeout(captureInFlightPromise, 13000, 'captureAgentFrame');
   } finally {
     captureInFlightPromise = null;
+    captureInFlightStartedAt = 0;
   }
 }
 
 async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '' } = {}) {
-  const liveFrame = await captureAgentFrame();
+  const liveFrame = await captureAgentFrame({ allowDebugger: true });
   let source = 'live';
   let dataUrl = liveFrame;
 
@@ -257,7 +286,8 @@ async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '' 
 
 async function captureAndUploadFrame(trigger = 'interval') {
   try {
-    const dataUrl = await captureAgentFrame();
+    const allowDebugger = trigger === 'manual' || trigger === 'debug';
+    const dataUrl = await captureAgentFrame({ allowDebugger });
 
     if (!dataUrl) {
       if (trigger !== 'interval') {
@@ -680,7 +710,7 @@ async function pollTelegramBridge() {
       }).catch(() => {});
     } else if (cmd.type === 'request_screenshot') {
       try {
-        const liveFrame = await captureAgentFrame();
+        const liveFrame = await captureAgentFrame({ allowDebugger: true });
         if (liveFrame) {
           lastCapturedAgentFrame = liveFrame;
           lastCapturedAgentFrameAt = Date.now();

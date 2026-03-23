@@ -21,6 +21,8 @@ let lastAutoDebugCaptureAt = 0;
 let progressClickStreak = 0;
 let validationSummaryStreak = 0;
 let lastValidationSummaryKey = '';
+let pendingProgressSnapshotSignature = '';
+let progressNoAdvanceCount = 0;
 const MAX_STEPS = 50;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
 const STAGNATION_WINDOW = 4;
@@ -108,6 +110,8 @@ export async function startAgent(config) {
   progressClickStreak = 0;
   validationSummaryStreak = 0;
   lastValidationSummaryKey = '';
+  pendingProgressSnapshotSignature = '';
+  progressNoAdvanceCount = 0;
 
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
   if (settings.selectedResume) {
@@ -173,6 +177,8 @@ export function stopAgent() {
   progressClickStreak = 0;
   validationSummaryStreak = 0;
   lastValidationSummaryKey = '';
+  pendingProgressSnapshotSignature = '';
+  progressNoAdvanceCount = 0;
   broadcastLog('Stopped by user.');
   updateTaskStatus('stopped');
   completeAutomationSession();
@@ -327,6 +333,15 @@ async function runAgentLoop() {
     const validationSummary = !isOutreach ? getValidationSummaryFromRawText(snapshot.rawText) : '';
     if (!isOutreach) {
       updateValidationSummaryStreak(validationSummary);
+      if (pendingProgressSnapshotSignature) {
+        const currentProgressSig = buildProgressStepSignature(snapshot, validationSummary);
+        if (currentProgressSig === pendingProgressSnapshotSignature) {
+          progressNoAdvanceCount += 1;
+        } else {
+          progressNoAdvanceCount = 0;
+        }
+        pendingProgressSnapshotSignature = '';
+      }
     }
 
     updatePageSignature(snapshot);
@@ -359,15 +374,22 @@ async function runAgentLoop() {
       const shouldCaptureForProgressStreak = progressClickStreak >= 2;
       const shouldCaptureForValidationStreak = validationSummaryStreak >= 2 && Boolean(validationSummary);
       const shouldCaptureForResumeRequiredError = /resume is required/i.test(String(snapshot.rawText || ''));
+      const shouldCaptureForNoAdvanceProgress = progressNoAdvanceCount >= 3;
       if (
         shouldCaptureForRepeatedProgress ||
         shouldCaptureForStagnantValidation ||
         shouldCaptureForProgressStreak ||
         shouldCaptureForValidationStreak ||
-        shouldCaptureForResumeRequiredError
+        shouldCaptureForResumeRequiredError ||
+        shouldCaptureForNoAdvanceProgress
       ) {
+        if (shouldCaptureForNoAdvanceProgress) {
+          broadcastLog(`Progress stuck detected: Next/Review attempted ${progressNoAdvanceCount}x without moving forward.`, true);
+        }
         const captureReason = shouldCaptureForResumeRequiredError
           ? 'resume required validation stuck'
+          : shouldCaptureForNoAdvanceProgress
+            ? `next/review clicked ${progressNoAdvanceCount}x without forward movement`
           : shouldCaptureForValidationStreak
             ? 'repeated validation errors'
             : shouldCaptureForProgressStreak
@@ -389,7 +411,8 @@ async function runAgentLoop() {
 
     // 3. Ask LLM or auto-recover when stuck
     let decision = null;
-    if (repeatedActionDetected || pageIsStagnant) {
+    const shouldAskLLMWithDebug = Boolean(debugImageDataUrl) && (Boolean(validationSummary) || progressNoAdvanceCount >= 3);
+    if ((repeatedActionDetected || pageIsStagnant) && !shouldAskLLMWithDebug) {
       decision = chooseRecoveryDecision(snapshot, repeatedActionKey);
       if (decision) {
         broadcastLog(`Recovery Action: ${decision.action} → ${decision.elementId || 'N/A'} ${decision.value ? '(val: ' + decision.value + ')' : ''}`, true);
@@ -405,8 +428,11 @@ async function runAgentLoop() {
 
     if (isProgressClickDecision(decision, snapshot)) {
       progressClickStreak += 1;
+      pendingProgressSnapshotSignature = buildProgressStepSignature(snapshot, validationSummary);
     } else if (decision.action !== 'wait') {
       progressClickStreak = 0;
+      pendingProgressSnapshotSignature = '';
+      progressNoAdvanceCount = 0;
     }
     
     // Track action for stuck detection
@@ -620,6 +646,16 @@ function getValidationSummaryFromRawText(rawText = '') {
     .filter(Boolean)
     .slice(0, 3)
     .join(' | ');
+}
+
+function buildProgressStepSignature(snapshot, validationSummary = '') {
+  const raw = String(snapshot?.rawText || '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  const modalPreview = raw.slice(0, 900);
+  const progressMatch = raw.match(/(\d{1,3})\s*%/);
+  const progressMarker = progressMatch?.[1] || '';
+  return `${snapshot?.url || ''}|${progressMarker}|${String(validationSummary || '').toLowerCase()}|${modalPreview}`;
 }
 
 function updateValidationSummaryStreak(validationSummary = '') {
