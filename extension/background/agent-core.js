@@ -453,15 +453,27 @@ function hasApplicationSuccessSignal(rawText = '') {
   return (
     text.includes('your application was sent') ||
     text.includes('application was sent') ||
-    text.includes('application submitted')
+    text.includes('application submitted') ||
+    text.includes('your application has been submitted') ||
+    text.includes('you have successfully applied') ||
+    text.includes('successfully applied to')
   );
 }
 
 function extractAppliedCompany(rawText = '') {
   const text = String(rawText || '');
-  const sentToMatch = text.match(/your application was sent(?:\s+to)?\s+([^\n.]+)/i);
-  if (sentToMatch?.[1]) {
-    return sentToMatch[1].replace(/\s+/g, ' ').trim();
+  const patterns = [
+    /your application was sent(?:\s+to)?\s+([^\n.]+)/i,
+    /your application has been submitted(?:\s+to)?\s+([^\n.]+)/i,
+    /application submitted(?:\s+to)?\s+([^\n.]+)/i,
+    /successfully applied(?:\s+to)?\s+([^\n.]+)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      return match[1].replace(/\s+/g, ' ').trim();
+    }
   }
 
   const applyToMatch = text.match(/apply to\s+([^\n]+)/i);
@@ -474,7 +486,9 @@ function extractAppliedCompany(rawText = '') {
 
 function buildApplicationSuccessSignature(snapshot) {
   const company = extractAppliedCompany(snapshot?.rawText || '');
-  const markerMatch = String(snapshot?.rawText || '').match(/your application was sent[^\n]*/i);
+  const markerMatch = String(snapshot?.rawText || '').match(
+    /(your application was sent[^\n]*|your application has been submitted[^\n]*|application submitted[^\n]*|successfully applied[^\n]*)/i
+  );
   const marker = markerMatch?.[0]?.trim() || '';
   return `${snapshot?.url || ''}|${company}|${marker}`.trim();
 }

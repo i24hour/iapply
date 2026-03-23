@@ -84,6 +84,36 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function attachDebugger(target, version = '1.3') {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.attach(target, version, () => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(true);
+    });
+  });
+}
+
+function detachDebugger(target) {
+  return new Promise((resolve) => {
+    chrome.debugger.detach(target, () => resolve(true));
+  });
+}
+
+function sendDebuggerCommand(target, method, params = {}) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.sendCommand(target, method, params, (result) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(result || null);
+    });
+  });
+}
+
 async function getPreferredLinkedInTab() {
   const status = getAgentStatus();
   const agentTabId = status?.tabId || null;
@@ -116,6 +146,32 @@ async function captureTabWindow(tab) {
   });
 }
 
+async function captureTabViaDebugger(tabId) {
+  if (!tabId) return null;
+  const target = { tabId };
+  let attached = false;
+
+  try {
+    await attachDebugger(target);
+    attached = true;
+    await sendDebuggerCommand(target, 'Page.enable');
+    const screenshot = await sendDebuggerCommand(target, 'Page.captureScreenshot', {
+      format: 'jpeg',
+      quality: 55,
+      fromSurface: true,
+    });
+    const data = screenshot?.data;
+    if (!data) return null;
+    return `data:image/jpeg;base64,${data}`;
+  } catch {
+    return null;
+  } finally {
+    if (attached) {
+      await detachDebugger(target);
+    }
+  }
+}
+
 async function uploadFrameToEndpoint(dataUrl, endpointPath) {
   const headers = await getAuthHeaders();
   if (!headers.Authorization) return false;
@@ -133,7 +189,11 @@ async function captureAgentFrame() {
   const tab = await getPreferredLinkedInTab();
   if (!tab) return null;
 
-  return captureTabWindow(tab);
+  const visibleCapture = await captureTabWindow(tab);
+  if (visibleCapture) return visibleCapture;
+
+  // Fallback: capture directly from the target tab even when it is not the visible tab.
+  return captureTabViaDebugger(tab.id);
 }
 
 async function captureAndUploadFrame(trigger = 'interval') {
