@@ -9,15 +9,18 @@ let postAgentRunning = false;
 let postAgentJobTitle = '';
 let postAgentKeywords = [];
 const processedPostKeys = new Set();
+let runtimeMessagingDisabled = false;
+let lastAgentLogKey = '';
+let lastAgentLogAt = 0;
 
 // Human simulation delays
 const DELAYS = {
-  minAction: 1000,
-  maxAction: 3000,
-  minTyping: 50,
-  maxTyping: 150,
-  scrollPause: 500,
-  pageLoad: 2000
+  minAction: 120,
+  maxAction: 320,
+  minTyping: 20,
+  maxTyping: 60,
+  scrollPause: 140,
+  pageLoad: 600
 };
 
 // Utility functions
@@ -33,10 +36,50 @@ async function humanDelay() {
   await sleep(randomDelay());
 }
 
+function canUseRuntimeMessaging() {
+  if (runtimeMessagingDisabled) return false;
+  try {
+    return Boolean(chrome?.runtime?.id);
+  } catch {
+    runtimeMessagingDisabled = true;
+    return false;
+  }
+}
+
+function safeRuntimeSendMessage(message, callback) {
+  if (!canUseRuntimeMessaging()) return false;
+  try {
+    chrome.runtime.sendMessage(message, (response) => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        const msg = String(err.message || '').toLowerCase();
+        if (
+          msg.includes('context invalidated') ||
+          msg.includes('extension context invalidated') ||
+          msg.includes('receiving end does not exist') ||
+          msg.includes('could not establish connection')
+        ) {
+          runtimeMessagingDisabled = true;
+        }
+      }
+      callback?.(response, err || null);
+    });
+    return true;
+  } catch {
+    runtimeMessagingDisabled = true;
+    return false;
+  }
+}
+
 function postAgentLog(message, isError = false) {
-  chrome.runtime.sendMessage({ action: 'agent_log', message, isError }, () => {
-    // Popup may be closed; ignore.
-  });
+  const now = Date.now();
+  const key = `${isError ? 'E' : 'I'}:${String(message || '')}`;
+  if (key === lastAgentLogKey && now - lastAgentLogAt < 1200) {
+    return;
+  }
+  lastAgentLogKey = key;
+  lastAgentLogAt = now;
+  safeRuntimeSendMessage({ action: 'agent_log', message, isError });
 }
 
 function normalizeText(value) {
@@ -1415,7 +1458,15 @@ function hasActiveResumeCardState(card) {
 function isResumeCardCommitted(card, modal = getEasyApplyModal()) {
   if (!card) return false;
   const radio = getResumeCardInput(card);
-  const radioChecked = Boolean(radio && radio.checked);
+  if (!radio) {
+    // Some LinkedIn resume UIs show a single fixed resume card with only a "View" action.
+    // If no explicit selector exists and there is no resume-required error, treat as committed.
+    const visibleCards = getVisibleResumeCards(modal);
+    if (!hasResumeRequirementError(modal) && visibleCards.length <= 1) return true;
+    return hasActiveResumeCardState(card) && !hasResumeRequirementError(modal);
+  }
+
+  const radioChecked = Boolean(radio.checked);
   if (!radioChecked) return false;
 
   const checkedCount = countCheckedResumeInputs(modal);
@@ -1429,6 +1480,12 @@ async function commitResumeSelection(card) {
   if (!modal || !card) return false;
 
   const radio = getResumeCardInput(card);
+  if (!radio) {
+    await forceClickElement(card);
+    await sleep(180);
+    return isResumeCardCommitted(card, modal);
+  }
+
   const attempts = [card, radio, card].filter(Boolean);
 
   for (const target of attempts) {
@@ -1442,7 +1499,7 @@ async function commitResumeSelection(card) {
       radio.dispatchEvent(new Event('change', { bubbles: true }));
       radio.dispatchEvent(new Event('click', { bubbles: true }));
     }
-    await sleep(500);
+    await sleep(180);
 
     if (isResumeCardCommitted(card, modal)) {
       return true;
@@ -1499,7 +1556,7 @@ async function revealAllResumeOptions(modal) {
     const label = (showMoreBtn.innerText || showMoreBtn.textContent || 'Show more resumes').trim();
     postAgentLog(`Clicking "${label}" to reveal hidden resumes...`);
     await forceClickElement(showMoreBtn);
-    await sleep(900);
+    await sleep(300);
 
     const afterCount = modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment').length;
     if (afterCount > beforeCount || !findShowMoreResumesButton(modal)) {
@@ -1929,7 +1986,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const jobs = await scrapeJobs();
       console.log(`Found ${jobs.length} jobs`);
       await submitJobs(jobs);
-      chrome.runtime.sendMessage({ type: 'status_update' });
+      safeRuntimeSendMessage({ type: 'status_update' });
     })();
     sendResponse({ success: true });
   }
@@ -1941,7 +1998,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await submitJobs(jobs);
       // Continue to apply if jobs found
       if (message.payload?.count && jobs.length > 0) {
-        chrome.runtime.sendMessage({ type: 'status_update' });
+        safeRuntimeSendMessage({ type: 'status_update' });
       }
     })();
     sendResponse({ success: true });
@@ -1956,7 +2013,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!isRunning) break;
         const result = await applyToJob(job);
         await submitApplicationResult(job.id, result.success, result.error);
-        chrome.runtime.sendMessage({ type: 'status_update' });
+        safeRuntimeSendMessage({ type: 'status_update' });
         await humanDelay();
       }
       isRunning = false;

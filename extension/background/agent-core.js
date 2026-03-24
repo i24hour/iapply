@@ -25,12 +25,24 @@ let pendingProgressSnapshotSignature = '';
 let progressNoAdvanceCount = 0;
 let progressTransitionLock = null;
 let internalMismatchRetryCount = 0;
+let currentApplicationModalKey = '';
+let resumeVerifiedForCurrentApplication = false;
+let resumeBacktrackAttempts = 0;
 const MAX_STEPS = 50;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
 const STAGNATION_WINDOW = 4;
 const AUTO_DEBUG_CAPTURE_COOLDOWN_MS = 60000;
-const PROGRESS_TRANSITION_LOCK_TIMEOUT_MS = 7000;
+const PROGRESS_TRANSITION_LOCK_TIMEOUT_MS = 3500;
 const RECOVERY_LOOP_DELAY_MS = 500;
+const START_LOOP_DELAY_MS = 1500;
+const SNAPSHOT_RETRY_DELAY_MS = 1000;
+const CAPTCHA_RETRY_DELAY_MS = 5000;
+const NAVIGATION_SETTLE_DELAY_MS = 2000;
+const ERROR_RETRY_DELAY_MS = 2000;
+const LOOP_DELAY_MIN_MS = 700;
+const LOOP_DELAY_MAX_MS = 1400;
+const ENABLE_AUTO_DEBUG_CAPTURE = false;
+const ENABLE_RECOVERY_CAPTURE = false;
 
 // Constants
 const API_URL = 'https://iapply-telegram-bot.onrender.com';
@@ -118,6 +130,9 @@ export async function startAgent(config) {
   progressNoAdvanceCount = 0;
   progressTransitionLock = null;
   internalMismatchRetryCount = 0;
+  currentApplicationModalKey = '';
+  resumeVerifiedForCurrentApplication = false;
+  resumeBacktrackAttempts = 0;
 
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
   if (settings.selectedResume) {
@@ -167,7 +182,7 @@ export async function startAgent(config) {
   await setAgentTabAutoDiscardable(false);
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model} | Mode: ${settings.mode || 'job_apply'}`);
   // Wait for page to load before starting loop
-  setTimeout(runAgentLoop, 5000);
+  setTimeout(runAgentLoop, START_LOOP_DELAY_MS);
 }
 
 export function stopAgent() {
@@ -187,6 +202,9 @@ export function stopAgent() {
   progressNoAdvanceCount = 0;
   progressTransitionLock = null;
   internalMismatchRetryCount = 0;
+  currentApplicationModalKey = '';
+  resumeVerifiedForCurrentApplication = false;
+  resumeBacktrackAttempts = 0;
   broadcastLog('Stopped by user.');
   updateTaskStatus('stopped');
   completeAutomationSession();
@@ -228,15 +246,15 @@ async function runAgentLoop() {
     let snapshot = await getDOMSnapshotFromActiveTab();
     
     if (!snapshot) {
-      broadcastLog('No snapshot received. Retrying in 3s...', true);
-      setTimeout(runAgentLoop, 3000);
+      broadcastLog('No snapshot received. Retrying quickly...', true);
+      setTimeout(runAgentLoop, SNAPSHOT_RETRY_DELAY_MS);
       return;
     }
     
     // Safety check - CAPTCHA
     if (snapshot.rawText && snapshot.rawText.toLowerCase().includes('security verification')) {
       broadcastLog('CAPTCHA detected! Please solve it manually, then the agent will continue.', true);
-      setTimeout(runAgentLoop, 10000);
+      setTimeout(runAgentLoop, CAPTCHA_RETRY_DELAY_MS);
       return;
     }
 
@@ -266,6 +284,30 @@ async function runAgentLoop() {
       }
     }
 
+    if (!isOutreach) {
+      const modalKey = extractCurrentApplicationModalKey(snapshot.rawText);
+      if (modalKey && modalKey !== currentApplicationModalKey) {
+        currentApplicationModalKey = modalKey;
+        resumeVerifiedForCurrentApplication = false;
+        resumeBacktrackAttempts = 0;
+        broadcastLog(`Detected new application modal: ${modalKey}. Resetting resume verification gate.`);
+      } else if (!modalKey) {
+        currentApplicationModalKey = '';
+        resumeVerifiedForCurrentApplication = false;
+        resumeBacktrackAttempts = 0;
+      }
+
+      const preferredResumeName = settings?.selectedResume?.file_name || '';
+      const normalizedPreferred = normalizeResumeToken(preferredResumeName);
+      if (
+        preferredResumeName &&
+        normalizedPreferred &&
+        normalizeResumeToken(snapshot.rawText).includes(normalizedPreferred)
+      ) {
+        resumeVerifiedForCurrentApplication = true;
+      }
+    }
+
     broadcastLog(`Page: ${snapshot.url} | ${snapshot.elements.length} elements`);
 
     // Auto-select resume if we detect a resume step (hardcoded, no LLM needed)
@@ -287,6 +329,13 @@ async function runAgentLoop() {
           titleTokens,
         });
         resumeSelectionCommitted = Boolean(result?.selectionCommitted);
+        const preferredResumeNameForCheck = settings?.selectedResume?.file_name || '';
+        if (
+          result?.selectionCommitted &&
+          (resumeNameMatchesPreferred(result?.selectedName || '', preferredResumeNameForCheck) || !preferredResumeNameForCheck)
+        ) {
+          resumeVerifiedForCurrentApplication = true;
+        }
         if (result?.changed) {
           broadcastLog(`Auto-selected resume: ${result.selectedName}`);
           // Rebuild snapshot to reflect the change
@@ -406,7 +455,7 @@ async function runAgentLoop() {
     }
 
     let capturedDebugFrame = false;
-    if (!isOutreach) {
+    if (!isOutreach && ENABLE_AUTO_DEBUG_CAPTURE) {
       const shouldCaptureForRepeatedProgress = repeatedActionDetected && isRepeatedProgressAction(snapshot, repeatedActionKey);
       const shouldCaptureForStagnantValidation = pageIsStagnant && Boolean(validationSummary);
       const shouldCaptureForProgressStreak = progressClickStreak >= 2;
@@ -511,7 +560,7 @@ async function runAgentLoop() {
         agentTabId = createdTab?.id || null;
       }
       await setAgentTabAutoDiscardable(false);
-      setTimeout(runAgentLoop, 5000);
+      setTimeout(runAgentLoop, NAVIGATION_SETTLE_DELAY_MS);
       return;
     }
     
@@ -528,6 +577,55 @@ async function runAgentLoop() {
 
     if (decision.action !== 'wait') {
       const isProgressDecision = !isOutreach && isProgressClickDecision(decision, snapshot);
+      if (isProgressDecision) {
+        const preferredResumeName = settings?.selectedResume?.file_name || '';
+        const targetElement = (snapshot?.elements || []).find((el) => el.id === decision.elementId);
+        const targetText = String(targetElement?.text || '').toLowerCase();
+        const isLateProgressStep = targetText.includes('review') || targetText.includes('submit');
+
+        if (preferredResumeName && isLateProgressStep && !resumeVerifiedForCurrentApplication) {
+          broadcastLog(
+            `Resume not verified yet before "${targetText || 'progress'}". Running enforced resume verification.`,
+            true,
+          );
+          const resumeHints = buildResumeRecoveryHints();
+          const verifyResult = await sendMessageToAgentTab({
+            action: 'auto_select_resume',
+            preferredResumeName: resumeHints.preferredResumeName,
+            resumeKeyword: resumeHints.resumeKeyword,
+            titleTokens: resumeHints.titleTokens,
+          }).catch(() => null);
+
+          const verifiedBySelection =
+            Boolean(verifyResult?.selectionCommitted) &&
+            resumeNameMatchesPreferred(verifyResult?.selectedName || '', preferredResumeName);
+          const verifiedByText =
+            Boolean(normalizeResumeToken(preferredResumeName)) &&
+            normalizeResumeToken(snapshot.rawText).includes(normalizeResumeToken(preferredResumeName));
+
+          if (verifiedBySelection || verifiedByText) {
+            resumeVerifiedForCurrentApplication = true;
+            broadcastLog(`Resume verification passed before "${targetText || 'progress'}".`);
+          } else {
+            const backButton = (snapshot?.elements || []).find((el) => {
+              const text = String(el?.text || '').toLowerCase();
+              return text.includes('back') && !text.includes('feedback');
+            });
+            if (backButton?.id && resumeBacktrackAttempts < 2) {
+              resumeBacktrackAttempts += 1;
+              broadcastLog('Resume verification failed. Moving one step back to force resume step check.', true);
+              await executeActionInActiveTab({
+                action: 'click',
+                elementId: backButton.id,
+                reasoning: 'Resume verification gate: backtrack for resume check.',
+              });
+              setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
+              return;
+            }
+            broadcastLog('Resume verification still unresolved; proceeding to avoid deadlock.', true);
+          }
+        }
+      }
 
       if (
         isProgressDecision &&
@@ -615,16 +713,16 @@ async function runAgentLoop() {
     }
     
     // 4. Loop with human delay
-    const delay = 3000 + Math.random() * 3000;
-    broadcastLog(`Waiting ${Math.round(delay/1000)}s...`);
+    const delay = LOOP_DELAY_MIN_MS + Math.random() * (LOOP_DELAY_MAX_MS - LOOP_DELAY_MIN_MS);
+    broadcastLog(`Waiting ${Math.max(1, Math.round(delay / 1000))}s...`);
     setTimeout(runAgentLoop, delay);
 
   } catch (error) {
     broadcastLog(`Error: ${error.message}`, true);
     // Don't die on recoverable errors, retry
     if (stepCount < MAX_STEPS) {
-      broadcastLog('Retrying in 5s...');
-      setTimeout(runAgentLoop, 5000);
+      broadcastLog('Retrying quickly...');
+      setTimeout(runAgentLoop, ERROR_RETRY_DELAY_MS);
     } else {
       agentState = 'IDLE';
       await setAgentTabAutoDiscardable(true);
@@ -697,6 +795,29 @@ function buildApplicationSuccessSignature(snapshot) {
   );
   const marker = markerMatch?.[0]?.trim() || '';
   return `${snapshot?.url || ''}|${company}|${marker}`.trim();
+}
+
+function extractCurrentApplicationModalKey(rawText = '') {
+  const text = String(rawText || '');
+  const match = text.match(/apply to\s+([^\n]+)/i);
+  if (!match?.[1]) return '';
+  return match[1].replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function normalizeResumeToken(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function resumeNameMatchesPreferred(candidateName = '', preferredName = '') {
+  const preferred = normalizeResumeToken(preferredName);
+  if (!preferred) return true;
+  const candidate = normalizeResumeToken(candidateName);
+  if (!candidate) return false;
+  return candidate === preferred || candidate.includes(preferred) || preferred.includes(candidate);
 }
 
 function isPageStagnant() {
@@ -852,9 +973,23 @@ function pickDeterministicRecoveryAction(snapshot, validationSummary = '') {
   const summary = String(validationSummary || '').toLowerCase();
   const combined = `${rawText}\n${summary}`;
   const elements = snapshot?.elements || [];
+  const hasProgressButton = elements.some(isPrimaryProgressButton);
+  const inResumeStep = rawText.includes('resume_step_detected');
+  const hasResumeRequiredError = /resume is required/.test(combined);
+  const hasSelectedResumeMarker = rawText.includes('[selected]');
+  const hasCheckedOnlyMarker = rawText.includes('[checked_only_not_committed]');
 
-  if (/resume is required|include an updated resume|be sure to include an updated resume/.test(combined)) {
+  if (hasResumeRequiredError) {
     return 'SELECT_RESUME';
+  }
+
+  if (inResumeStep) {
+    if (!hasSelectedResumeMarker || hasCheckedOnlyMarker) {
+      return 'SELECT_RESUME';
+    }
+    if (hasProgressButton) {
+      return 'CLICK_NEXT';
+    }
   }
 
   const hasUncheckedRequiredCheckbox = elements.some((element) => {
@@ -874,11 +1009,11 @@ function pickDeterministicRecoveryAction(snapshot, validationSummary = '') {
     if (element?.required && !hasMeaningfulFieldValue(element)) return true;
     return false;
   });
-  if (hasVisibleValidationIssue || /form_validation_errors|enter a decimal number|required|invalid|select an option/.test(combined)) {
+  if (hasVisibleValidationIssue || /form_validation_errors|enter a decimal number|select checkbox to proceed|select an option/.test(combined)) {
     return 'FILL_FIELD';
   }
 
-  if (elements.some(isPrimaryProgressButton)) {
+  if (hasProgressButton) {
     return 'CLICK_NEXT';
   }
 
@@ -927,13 +1062,15 @@ async function runDeterministicFallback(
   snapshot,
   { reason = '', validationSummary = '', forceCapture = false, uploadCapture = true } = {},
 ) {
-  const captureResult = await maybeCaptureAutoDebugSnapshot(
-    snapshot,
-    '',
-    validationSummary,
-    reason || 'deterministic fallback',
-    { force: forceCapture, upload: uploadCapture },
-  );
+  const captureResult = ENABLE_RECOVERY_CAPTURE
+    ? await maybeCaptureAutoDebugSnapshot(
+        snapshot,
+        '',
+        validationSummary,
+        reason || 'deterministic fallback',
+        { force: forceCapture, upload: uploadCapture },
+      )
+    : null;
   const screenshotPath = captureResult?.capturePath || '';
   broadcastLog(`RECOVERY_FALLBACK screenshot_path=${screenshotPath || 'unavailable'}`);
 
