@@ -15,6 +15,7 @@ let currentTaskChannel = 'extension_popup';
 let currentAgentSessionId = null;
 let targetApplyCount = 10;
 let appliedCount = 0;
+let preferredJobsSearchUrl = '';
 let lastSuccessSignature = '';
 let lastAutoDebugCaptureSignature = '';
 let lastAutoDebugCaptureAt = 0;
@@ -43,6 +44,7 @@ const LOOP_DELAY_MIN_MS = 700;
 const LOOP_DELAY_MAX_MS = 1400;
 const ENABLE_AUTO_DEBUG_CAPTURE = false;
 const ENABLE_RECOVERY_CAPTURE = false;
+const LLM_REQUEST_TIMEOUT_MS = 12000;
 
 // Constants
 const API_URL = 'https://iapply-telegram-bot.onrender.com';
@@ -120,6 +122,7 @@ export async function startAgent(config) {
   currentAgentSessionId = config.agentSessionId || null;
   targetApplyCount = Math.min(Math.max(Number(config.count) || 10, 1), 100);
   appliedCount = 0;
+  preferredJobsSearchUrl = '';
   lastSuccessSignature = '';
   lastAutoDebugCaptureSignature = '';
   lastAutoDebugCaptureAt = 0;
@@ -167,6 +170,7 @@ export async function startAgent(config) {
     // Build job search URL — add f_TPR time filter if selected
     let searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(settings.searchQuery)}&f_AL=true`;
     if (settings.jobPostedTime) searchUrl += `&f_TPR=${settings.jobPostedTime}`;
+    preferredJobsSearchUrl = searchUrl;
     broadcastLog(`Navigating to LinkedIn Jobs search (posted: ${timeLabel})...`);
     const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
     let tab;
@@ -192,6 +196,7 @@ export function stopAgent() {
   setAgentTabAutoDiscardable(true).catch(() => {});
   agentTabId = null;
   appliedCount = 0;
+  preferredJobsSearchUrl = '';
   lastSuccessSignature = '';
   lastAutoDebugCaptureSignature = '';
   lastAutoDebugCaptureAt = 0;
@@ -505,8 +510,36 @@ async function runAgentLoop() {
       }
     }
 
+    if (!decision && !isOutreach) {
+      const deterministicJobDecision = chooseDeterministicJobsSearchDecision(snapshot);
+      if (deterministicJobDecision) {
+        decision = deterministicJobDecision;
+        broadcastLog(
+          `Deterministic Job Action: ${decision.action} → ${decision.elementId || decision.value || 'N/A'}`,
+        );
+      }
+    }
+
     if (!decision) {
-      decision = await callLLM(snapshot, stuckHint + resumeAutoSelectedHint);
+      try {
+        decision = await callLLM(snapshot, stuckHint + resumeAutoSelectedHint);
+      } catch (llmError) {
+        broadcastLog(`LLM call failed: ${llmError.message}`, true);
+        if (!isOutreach) {
+          const deterministicFallback = chooseDeterministicJobsSearchDecision(snapshot);
+          if (deterministicFallback) {
+            decision = deterministicFallback;
+            broadcastLog(
+              `Fallback Job Action: ${decision.action} → ${decision.elementId || decision.value || 'N/A'}`,
+              true,
+            );
+          } else {
+            throw llmError;
+          }
+        } else {
+          throw llmError;
+        }
+      }
     }
     if (capturedDebugFrame) {
       broadcastLog('DEBUG_IMAGE_USED: screenshot was captured for diagnostics, not sent to model.');
@@ -895,7 +928,86 @@ function findEasyApplyStartCandidate(snapshot) {
   });
 
   if (!buttonLike.length) return null;
-  return buttonLike[0];
+
+  let best = null;
+  let bestScore = -Infinity;
+  for (const candidate of buttonLike) {
+    const text = String(candidate?.text || '').toLowerCase().trim();
+    const y = Number(candidate?.center?.y || 0);
+    const x = Number(candidate?.center?.x || 0);
+    let score = 0;
+    if (text === 'easy apply') score += 3;
+    if (text.includes('easy apply')) score += 2;
+    if (y >= 300) score += 4; // likely job detail pane action button, not top filter chip
+    if (x >= 650) score += 2; // right pane bias on desktop where primary Easy Apply lives
+    if (y > 0 && y < 260) score -= 8; // top search/filter bar chip
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function findEasyApplyListingCandidate(snapshot) {
+  const elements = snapshot?.elements || [];
+  const candidates = elements.filter((el) => {
+    const text = String(el?.text || '').toLowerCase();
+    if (!text.includes('easy apply')) return false;
+    if (text.includes('applied') || text.includes('application submitted')) return false;
+    if (text === 'easy apply') return false; // filter chip or detail button handled separately
+    const tag = String(el?.tag || '').toLowerCase();
+    const role = String(el?.role || '').toLowerCase();
+    return tag === 'a' || role === 'link' || role === 'button' || tag === 'button';
+  });
+  return candidates[0] || null;
+}
+
+function chooseDeterministicJobsSearchDecision(snapshot) {
+  if (!snapshot || hasOpenEasyApplyModal(snapshot)) return null;
+
+  const easyApplyButton = findEasyApplyStartCandidate(snapshot);
+  if (easyApplyButton?.id) {
+    return {
+      action: 'click',
+      elementId: easyApplyButton.id,
+      reasoning: 'Deterministic mode: clicking visible Easy Apply button directly.',
+    };
+  }
+
+  const listingCandidate = findEasyApplyListingCandidate(snapshot);
+  if (listingCandidate?.id) {
+    return {
+      action: 'click',
+      elementId: listingCandidate.id,
+      reasoning: 'Deterministic mode: opening next Easy Apply job listing directly.',
+    };
+  }
+
+  const raw = String(snapshot.rawText || '').toLowerCase();
+  const url = String(snapshot.url || '').toLowerCase();
+  const looksLikeSingleAppliedDetail =
+    raw.includes('application status') ||
+    raw.includes('application submitted') ||
+    raw.includes('you applied');
+  const notSearchFeed = !url.includes('/jobs/search/');
+
+  if ((looksLikeSingleAppliedDetail || notSearchFeed) && preferredJobsSearchUrl) {
+    return {
+      action: 'navigate',
+      value: preferredJobsSearchUrl,
+      reasoning: 'Deterministic mode: returning to jobs search results to continue applying.',
+    };
+  }
+
+  if (isJobSearchSurface(snapshot)) {
+    return {
+      action: 'scroll',
+      reasoning: 'Deterministic mode: searching for more Easy Apply cards in results.',
+    };
+  }
+
+  return null;
 }
 
 function maybeForceEasyApplyDecision(snapshot, decision) {
@@ -1459,12 +1571,30 @@ async function callLLM(snapshot, stuckHint = '') {
   }
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = LLM_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function callGemini(prompt) {
   const model = settings.model || 'gemini-3.1-flash-lite-preview';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
   const parts = [{ text: prompt }];
   
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1525,7 +1655,7 @@ async function callAnthropic(prompt) {
   const model = settings.model || 'claude-3-5-sonnet-20241022';
   const messageContent = [{ type: 'text', text: prompt }];
 
-  const res = await fetch(`${baseUrl}/v1/messages`, {
+  const res = await fetchWithTimeout(`${baseUrl}/v1/messages`, {
     method: 'POST',
     headers: {
       'x-api-key': settings.apiKey,
@@ -1580,7 +1710,7 @@ async function callOpenAICompat(prompt) {
     'Authorization': `Bearer ${settings.apiKey}`,
     'Content-Type': 'application/json'
   };
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+  const res = await fetchWithTimeout(`${baseUrl}/v1/chat/completions`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
