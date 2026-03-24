@@ -76,7 +76,9 @@ function storeDebugLog(message, isError = false) {
   }
 
   chrome.storage.local.set({ agent_debug_logs: debugLogs }).catch?.(() => {});
-  chrome.runtime.sendMessage({ action: 'agent_log', ...entry }).catch(() => {});
+  chrome.runtime
+    .sendMessage({ action: 'agent_log', ...entry, _fromServiceWorker: true })
+    .catch(() => {});
   return entry;
 }
 
@@ -529,6 +531,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   } else if (message.action === 'agent_log') {
+    if (message._fromServiceWorker) {
+      // Prevent recursive self-relay loops from runtime broadcast.
+      return false;
+    }
     appendAgentLog(message.message, message.isError);
     emitAgentLog(message.message, message.isError).catch(() => {});
   } else if (message.action === 'set_token') {

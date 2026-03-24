@@ -739,7 +739,16 @@ async function runAgentLoop() {
           return;
         }
       }
-      await executeActionInActiveTab(decision);
+      const executionResult = await executeActionInActiveTab(decision);
+      if (decision.action === 'open_easy_apply_listing') {
+        if (executionResult?.opened) {
+          broadcastLog(`Opened Easy Apply listing: ${executionResult.title || 'unknown job'}.`);
+        } else {
+          const reason = executionResult?.reason || 'no visible easy apply listing found';
+          broadcastLog(`Could not open Easy Apply listing (${reason}). Scrolling results...`, true);
+          await executeActionInActiveTab({ action: 'scroll', reasoning: 'Fallback scroll while locating Easy Apply listing.' });
+        }
+      }
       internalMismatchRetryCount = 0;
 
       if (isProgressDecision) {
@@ -903,6 +912,11 @@ function isJobSearchSurface(snapshot) {
   return /linkedin\.com\/jobs\//.test(url);
 }
 
+function hasEasyApplyFilterInUrl(url = '') {
+  const lowered = String(url || '').toLowerCase();
+  return lowered.includes('f_al=true') || lowered.includes('f_al=1');
+}
+
 function hasOpenEasyApplyModal(snapshot) {
   const raw = String(snapshot?.rawText || '').toLowerCase();
   if (!raw) return false;
@@ -985,6 +999,16 @@ function findEasyApplyListingCandidate(snapshot) {
 
 function chooseDeterministicJobsSearchDecision(snapshot) {
   if (!snapshot || hasOpenEasyApplyModal(snapshot)) return null;
+  const url = String(snapshot.url || '');
+  const loweredUrl = url.toLowerCase();
+
+  if (isJobSearchSurface(snapshot) && !hasEasyApplyFilterInUrl(loweredUrl) && preferredJobsSearchUrl) {
+    return {
+      action: 'navigate',
+      value: preferredJobsSearchUrl,
+      reasoning: 'Deterministic mode: enforcing Easy Apply search filter before continuing.',
+    };
+  }
 
   // If the current job detail shows "Applied", skip looking for the Easy Apply
   // start button entirely. This prevents accidentally clicking the filter chip.
@@ -1001,6 +1025,16 @@ function chooseDeterministicJobsSearchDecision(snapshot) {
     }
   }
 
+  const isSearchFeed = loweredUrl.includes('/jobs/search/');
+  if (isJobSearchSurface(snapshot) && isSearchFeed) {
+    return {
+      action: 'open_easy_apply_listing',
+      reasoning: alreadyApplied
+        ? 'Deterministic mode: current job already applied. Opening next Easy Apply listing from results.'
+        : 'Deterministic mode: opening a visible Easy Apply listing from results.',
+    };
+  }
+
   // Find the next unapplied Easy Apply listing in the sidebar
   const listingCandidate = findEasyApplyListingCandidate(snapshot);
   if (listingCandidate?.id) {
@@ -1014,13 +1048,12 @@ function chooseDeterministicJobsSearchDecision(snapshot) {
   }
 
   const raw = String(snapshot.rawText || '').toLowerCase();
-  const url = String(snapshot.url || '').toLowerCase();
   const looksLikeSingleAppliedDetail =
     alreadyApplied ||
     raw.includes('application status') ||
     raw.includes('application submitted') ||
     raw.includes('you applied');
-  const notSearchFeed = !url.includes('/jobs/search/');
+  const notSearchFeed = !isSearchFeed;
 
   if ((looksLikeSingleAppliedDetail || notSearchFeed) && preferredJobsSearchUrl) {
     return {
@@ -1860,8 +1893,12 @@ async function triggerValidationRecovery() {
 }
 
 async function executeActionInActiveTab(decision) {
+  if (decision?.action === 'open_easy_apply_listing') {
+    return sendMessageToAgentTab({ action: 'open_next_easy_apply_job' }).catch(() => null);
+  }
   await sendMessageToAgentTab({
     action: 'execute_decision',
     decision,
   });
+  return null;
 }

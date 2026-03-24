@@ -1897,6 +1897,105 @@ function findPrimaryProgressButtonInModal(modal = getEasyApplyModal()) {
   return candidates[0] || null;
 }
 
+function isCardApplied(card) {
+  const text = normalizeText(card?.innerText || '');
+  return (
+    text.includes('application submitted') ||
+    text.includes('applied') ||
+    card?.classList?.contains('job-card-container--applied')
+  );
+}
+
+function cardHasEasyApply(card) {
+  if (!card) return false;
+  const badgeSelectors = [
+    '.job-card-container__apply-method',
+    '.job-card-list__apply-method',
+    '.job-card-container__footer-item',
+    '.job-card-container__metadata-item',
+    '.artdeco-entity-lockup__caption',
+    '.artdeco-entity-lockup__metadata',
+  ];
+  const badgeText = badgeSelectors
+    .flatMap((selector) => Array.from(card.querySelectorAll(selector)))
+    .map((el) => normalizeText(el.textContent || el.innerText || ''))
+    .join(' ');
+  if (badgeText.includes('easy apply')) return true;
+  return normalizeText(card.innerText || '').includes('easy apply');
+}
+
+function getCardTitle(card) {
+  if (!card) return '';
+  const titleEl = card.querySelector(
+    '.job-card-list__title, .job-card-list__title--link, a.job-card-container__link, a[href*="/jobs/view/"]'
+  );
+  return (titleEl?.textContent || '').trim();
+}
+
+function isCardSelected(card) {
+  if (!card) return false;
+  return (
+    card.getAttribute('aria-current') === 'true' ||
+    card.classList.contains('jobs-search-results__list-item--active') ||
+    card.classList.contains('job-card-container--selected') ||
+    card.classList.contains('artdeco-list__item--active')
+  );
+}
+
+function getCardClickTarget(card) {
+  if (!card) return null;
+  return (
+    card.querySelector('a.job-card-list__title--link') ||
+    card.querySelector('a.job-card-container__link') ||
+    card.querySelector('a[href*="/jobs/view/"]') ||
+    card.querySelector('.job-card-list__title') ||
+    card.querySelector('.job-card-container__link') ||
+    card
+  );
+}
+
+async function openNextEasyApplyJob() {
+  const cardSelectors = [
+    'li.jobs-search-results__list-item',
+    'div.jobs-search-results__list-item',
+    'div.job-card-container',
+    'li.scaffold-layout__list-item',
+  ].join(', ');
+  const cards = Array.from(document.querySelectorAll(cardSelectors)).filter((card) => isElementVisible(card));
+
+  if (!cards.length) {
+    return { opened: false, reason: 'no job cards visible' };
+  }
+
+  let fallbackSelected = null;
+  for (const card of cards) {
+    if (!cardHasEasyApply(card)) continue;
+    if (isCardApplied(card)) continue;
+
+    if (isCardSelected(card)) {
+      fallbackSelected = card;
+      continue;
+    }
+
+    const target = getCardClickTarget(card);
+    if (!target) continue;
+    await forceClickElement(target);
+    await sleep(220);
+    return { opened: true, title: getCardTitle(card) || 'Untitled role', reason: 'opened_unselected_easy_apply_card' };
+  }
+
+  if (fallbackSelected) {
+    const target = getCardClickTarget(fallbackSelected);
+    if (target) {
+      await forceClickElement(target);
+      await sleep(180);
+      return { opened: true, title: getCardTitle(fallbackSelected) || 'Untitled role', reason: 'reopened_selected_easy_apply_card' };
+    }
+  }
+
+  return { opened: false, reason: 'no unapplied easy apply card found' };
+}
+
 // Wait for element to appear
 function waitForElement(selector, timeout = 10000) {
   return new Promise((resolve, reject) => {
@@ -1967,6 +2066,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'auto_fix_validation') {
     autoFixModalValidationIssues().then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
+
+  if (message.action === 'open_next_easy_apply_job') {
+    openNextEasyApplyJob().then((result) => {
       sendResponse(result);
     });
     return true;
