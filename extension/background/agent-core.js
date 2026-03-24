@@ -512,6 +512,14 @@ async function runAgentLoop() {
       broadcastLog('DEBUG_IMAGE_USED: screenshot was captured for diagnostics, not sent to model.');
     }
 
+    if (!isOutreach) {
+      const forcedDecision = maybeForceEasyApplyDecision(snapshot, decision);
+      if (forcedDecision) {
+        broadcastLog('Override: replacing scroll/wait with direct Easy Apply click on jobs page.');
+        decision = forcedDecision;
+      }
+    }
+
     broadcastLog(`LLM: ${decision.reasoning}`);
     broadcastLog(`Action: ${decision.action} → ${decision.elementId || 'N/A'} ${decision.value ? '(val: ' + decision.value + ')' : ''}`);
 
@@ -855,6 +863,55 @@ function isProgressClickDecision(decision, snapshot) {
   if (decision?.action !== 'click') return false;
   const target = (snapshot?.elements || []).find((el) => el.id === decision.elementId);
   return isPrimaryProgressButton(target);
+}
+
+function isJobSearchSurface(snapshot) {
+  const url = String(snapshot?.url || '').toLowerCase();
+  return /linkedin\.com\/jobs\//.test(url);
+}
+
+function hasOpenEasyApplyModal(snapshot) {
+  const raw = String(snapshot?.rawText || '').toLowerCase();
+  if (!raw) return false;
+  return (
+    raw.includes('application powered by linkedin') ||
+    raw.includes('application powered by smart_recruiters') ||
+    raw.includes('submitting this application won') ||
+    raw.includes('form_validation_errors') ||
+    raw.includes('resume_step_detected')
+  );
+}
+
+function findEasyApplyStartCandidate(snapshot) {
+  const elements = snapshot?.elements || [];
+  const buttonLike = elements.filter((el) => {
+    const text = String(el?.text || '').toLowerCase();
+    if (!text.includes('easy apply')) return false;
+    if (text.includes('submit application') || text.includes('apply now')) return false;
+    if (text.includes('applied') || text.includes('application submitted')) return false;
+    const tag = String(el?.tag || '').toLowerCase();
+    const role = String(el?.role || '').toLowerCase();
+    return tag === 'button' || role === 'button' || role === 'link' || tag === 'a';
+  });
+
+  if (!buttonLike.length) return null;
+  return buttonLike[0];
+}
+
+function maybeForceEasyApplyDecision(snapshot, decision) {
+  if (!snapshot || !decision) return null;
+  if (!isJobSearchSurface(snapshot) || hasOpenEasyApplyModal(snapshot)) return null;
+  const action = String(decision.action || '').toLowerCase();
+  if (action !== 'scroll' && action !== 'wait') return null;
+
+  const easyApplyCandidate = findEasyApplyStartCandidate(snapshot);
+  if (!easyApplyCandidate?.id) return null;
+
+  return {
+    action: 'click',
+    elementId: easyApplyCandidate.id,
+    reasoning: 'Deterministic override: Easy Apply is visible on jobs page; clicking it instead of scrolling.',
+  };
 }
 
 function getValidationSummaryFromRawText(rawText = '') {
