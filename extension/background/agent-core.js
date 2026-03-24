@@ -333,24 +333,24 @@ async function runAgentLoop() {
     if (snapshot.rawText?.includes('RESUME_STEP_DETECTED')) {
       resumeStepSeenForCurrentApplication = true;
       broadcastLog('Resume selection step detected — running auto-select...');
-      const goalText = (settings.userGoal || settings.searchQuery || '').toLowerCase();
-      const hintMatch = goalText.match(/\b(\w+)\s+resume\b/i);
-      const resumeKeyword = hintMatch?.[1]?.toLowerCase() || null;
-      const titleTokens = (settings.searchQuery || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
-      const preferredResumeName = settings?.selectedResume?.file_name || '';
+      const resumeHints = buildResumeRecoveryHints();
+      const preferredResumeName = resumeHints.preferredResumeName;
 
       try {
         const result = await sendMessageToAgentTab({
           action: 'auto_select_resume',
-          preferredResumeName,
-          resumeKeyword,
-          titleTokens,
+          preferredResumeName: resumeHints.preferredResumeName,
+          resumeKeyword: resumeHints.resumeKeyword,
+          titleTokens: resumeHints.titleTokens,
         });
         resumeSelectionCommitted = Boolean(result?.selectionCommitted);
         const preferredResumeNameForCheck = settings?.selectedResume?.file_name || '';
+        const selectedName = String(result?.selectedName || '');
+        const matchesByName = resumeNameMatchesPreferred(selectedName, preferredResumeNameForCheck);
+        const matchesByIntent = resumeNameMatchesIntent(selectedName, resumeHints.intentTokens, resumeHints.disallowedTokens);
         if (
           result?.selectionCommitted &&
-          (resumeNameMatchesPreferred(result?.selectedName || '', preferredResumeNameForCheck) || !preferredResumeNameForCheck)
+          ((preferredResumeNameForCheck && matchesByName) || (!preferredResumeNameForCheck && matchesByIntent))
         ) {
           resumeVerifiedForCurrentApplication = true;
         }
@@ -647,12 +647,15 @@ async function runAgentLoop() {
     if (decision.action !== 'wait') {
       const isProgressDecision = !isOutreach && isProgressClickDecision(decision, snapshot);
       if (isProgressDecision) {
-        const preferredResumeName = settings?.selectedResume?.file_name || '';
+        const resumeHints = buildResumeRecoveryHints();
+        const preferredResumeName = resumeHints.preferredResumeName;
+        const hasIntentTokens = Array.isArray(resumeHints.intentTokens) && resumeHints.intentTokens.length > 0;
+        const needsResumeGate = Boolean(preferredResumeName) || hasIntentTokens;
         const targetElement = (snapshot?.elements || []).find((el) => el.id === decision.elementId);
         const targetText = String(targetElement?.text || '').toLowerCase();
         const isLateProgressStep = targetText.includes('review') || targetText.includes('submit');
 
-        if (preferredResumeName && isLateProgressStep && !resumeVerifiedForCurrentApplication) {
+        if (needsResumeGate && isLateProgressStep && !resumeVerifiedForCurrentApplication) {
           if (!resumeStepSeenForCurrentApplication && !resumeStepProbeAttempted) {
             const backButtonForProbe = (snapshot?.elements || []).find((el) => {
               const text = String(el?.text || '').toLowerCase();
@@ -678,12 +681,13 @@ async function runAgentLoop() {
             `Resume not verified yet before "${targetText || 'progress'}". Running enforced resume verification.`,
             true,
           );
-          const resumeHints = buildResumeRecoveryHints();
           const verifyResult = await sendMessageToAgentTab({
             action: 'verify_preferred_resume',
             preferredResumeName: resumeHints.preferredResumeName,
             resumeKeyword: resumeHints.resumeKeyword,
             titleTokens: resumeHints.titleTokens,
+            expectedTokens: resumeHints.intentTokens,
+            disallowedTokens: resumeHints.disallowedTokens,
             forceFix: isLateProgressStep,
           }).catch(() => null);
 
@@ -939,6 +943,22 @@ function resumeNameMatchesPreferred(candidateName = '', preferredName = '') {
   const candidate = normalizeResumeToken(candidateName);
   if (!candidate) return false;
   return candidate === preferred || candidate.includes(preferred) || preferred.includes(candidate);
+}
+
+function resumeNameMatchesIntent(candidateName = '', intentTokens = [], disallowedTokens = []) {
+  const candidate = normalizeResumeToken(candidateName);
+  if (!candidate) return false;
+
+  const expected = Array.isArray(intentTokens)
+    ? intentTokens.map((token) => normalizeResumeToken(token)).filter(Boolean)
+    : [];
+  const blocked = Array.isArray(disallowedTokens)
+    ? disallowedTokens.map((token) => normalizeResumeToken(token)).filter(Boolean)
+    : [];
+
+  const hasExpected = expected.length === 0 || expected.some((token) => candidate.includes(token));
+  const hasBlocked = blocked.some((token) => candidate.includes(token));
+  return hasExpected && !hasBlocked;
 }
 
 function isPageStagnant() {
@@ -1318,10 +1338,12 @@ async function maybeCaptureAutoDebugSnapshot(
 function buildResumeRecoveryHints() {
   const goalText = (settings.userGoal || settings.searchQuery || '').toLowerCase();
   const hintMatch = goalText.match(/\b(\w+)\s+resume\b/i);
-  const resumeKeyword = hintMatch?.[1]?.toLowerCase() || null;
+  const intentTokens = Array.isArray(settings.resumeIntentTokens) ? settings.resumeIntentTokens.filter(Boolean) : [];
+  const disallowedTokens = Array.isArray(settings.resumeDisallowedTokens) ? settings.resumeDisallowedTokens.filter(Boolean) : [];
+  const resumeKeyword = hintMatch?.[1]?.toLowerCase() || intentTokens[0]?.toLowerCase() || null;
   const titleTokens = (settings.searchQuery || '').toLowerCase().split(/\s+/).filter((t) => t.length > 2);
   const preferredResumeName = settings?.selectedResume?.file_name || '';
-  return { preferredResumeName, resumeKeyword, titleTokens };
+  return { preferredResumeName, resumeKeyword, titleTokens, intentTokens, disallowedTokens };
 }
 
 function pickDeterministicRecoveryAction(snapshot, validationSummary = '') {

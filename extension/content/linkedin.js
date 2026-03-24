@@ -1528,6 +1528,22 @@ function resumeNameLikelyMatchesPreferred(candidateName, preferredName) {
   return candidate === preferred || candidate.includes(preferred) || preferred.includes(candidate);
 }
 
+function resumeNameMatchesIntent(candidateName, expectedTokens = [], disallowedTokens = []) {
+  const candidate = normalizeResumeName(candidateName);
+  if (!candidate) return false;
+
+  const expected = Array.isArray(expectedTokens)
+    ? expectedTokens.map((t) => normalizeResumeName(t)).filter(Boolean)
+    : [];
+  const blocked = Array.isArray(disallowedTokens)
+    ? disallowedTokens.map((t) => normalizeResumeName(t)).filter(Boolean)
+    : [];
+
+  const hasExpected = expected.length === 0 || expected.some((token) => candidate.includes(token));
+  const hasBlocked = blocked.some((token) => candidate.includes(token));
+  return hasExpected && !hasBlocked;
+}
+
 function extractResumeCardName(card) {
   if (!card) return '';
   const nameEl = card.querySelector(
@@ -2067,7 +2083,14 @@ async function openResumeEditFromReview() {
   };
 }
 
-async function verifyPreferredResumeInModal(preferredResumeName, resumeKeyword, titleTokens, forceFix = false) {
+async function verifyPreferredResumeInModal(
+  preferredResumeName,
+  resumeKeyword,
+  titleTokens,
+  expectedTokens = [],
+  disallowedTokens = [],
+  forceFix = false
+) {
   const modal = getEasyApplyModal();
   if (!modal) {
     return { matched: false, selectedName: '', corrected: false, reason: 'no easy apply modal' };
@@ -2075,11 +2098,12 @@ async function verifyPreferredResumeInModal(preferredResumeName, resumeKeyword, 
 
   const selectedBefore = getDisplayedResumeName(modal);
   const preferredProvided = Boolean(String(preferredResumeName || '').trim());
-  if (!preferredProvided) {
-    return { matched: true, selectedName: selectedBefore, corrected: false, reason: 'no preferred resume configured' };
-  }
-
-  if (resumeNameLikelyMatchesPreferred(selectedBefore, preferredResumeName)) {
+  const matchesPreferredBefore = preferredProvided
+    ? resumeNameLikelyMatchesPreferred(selectedBefore, preferredResumeName)
+    : true;
+  const matchesIntentBefore = resumeNameMatchesIntent(selectedBefore, expectedTokens, disallowedTokens);
+  const initialMatch = matchesPreferredBefore && matchesIntentBefore;
+  if (initialMatch) {
     return { matched: true, selectedName: selectedBefore, corrected: false, reason: 'already matching' };
   }
 
@@ -2095,9 +2119,13 @@ async function verifyPreferredResumeInModal(preferredResumeName, resumeKeyword, 
   if (autoResult?.changed) corrected = true;
 
   const selectedAfter = getDisplayedResumeName(getEasyApplyModal());
-  const matchedAfter =
-    resumeNameLikelyMatchesPreferred(selectedAfter, preferredResumeName) ||
-    resumeNameLikelyMatchesPreferred(autoResult?.selectedName || '', preferredResumeName);
+  const candidateAfter = selectedAfter || autoResult?.selectedName || '';
+  const matchesPreferredAfter = preferredProvided
+    ? (resumeNameLikelyMatchesPreferred(candidateAfter, preferredResumeName) ||
+       resumeNameLikelyMatchesPreferred(autoResult?.selectedName || '', preferredResumeName))
+    : true;
+  const matchesIntentAfter = resumeNameMatchesIntent(candidateAfter, expectedTokens, disallowedTokens);
+  const matchedAfter = matchesPreferredAfter && matchesIntentAfter;
 
   return {
     matched: matchedAfter,
@@ -2244,6 +2272,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       message.preferredResumeName,
       message.resumeKeyword,
       message.titleTokens,
+      message.expectedTokens,
+      message.disallowedTokens,
       message.forceFix === true
     ).then((result) => {
       sendResponse(result);

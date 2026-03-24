@@ -7,6 +7,8 @@ const MAX_LOG_ENTRIES = 300;
 const RECORDING_INTERVAL_MS = 15000;
 const CAPTURE_STALE_LOCK_MS = 7000;
 const CAPTURE_FRAME_TIMEOUT_MS = 7500;
+const RESUME_SELECT_MIN_SCORE = 6;
+const RESUME_SELECT_MIN_MARGIN = 2;
 
 let telegramPollTimer = null;
 let recordingTimer = null;
@@ -355,50 +357,173 @@ function startLiveRecording() {
   captureAndUploadFrame('start').catch(() => {});
 }
 
-// Score a resume against a job-title search query using keyword overlap.
-// Returns 0 if no tokens match, or the count of matching tokens.
-function scoreResumeForQuery(resume, queryTokens) {
-  if (!queryTokens.length) return 0;
-  const fileName = (resume.file_name || '').toLowerCase();
-  const skills = Array.isArray(resume.parsed_data?.skills)
-    ? resume.parsed_data.skills.join(' ').toLowerCase()
-    : '';
-  const combined = `${fileName} ${skills}`;
-  return queryTokens.reduce((score, token) => score + (combined.includes(token) ? 1 : 0), 0);
+function normalizeResumeToken(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 }
 
-// Fetch all uploaded resumes and return the one most relevant to the search query.
+function tokenizeResumeQuery(searchQuery = '') {
+  const stopWords = new Set([
+    'and', 'with', 'for', 'the', 'from', 'this', 'that', 'role', 'job', 'jobs',
+    'india', 'remote', 'hybrid', 'onsite', 'in', 'to', 'of', 'on', 'at',
+  ]);
+  return String(searchQuery || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 1 && !stopWords.has(t));
+}
+
+function buildResumeIntentProfile(searchQuery = '') {
+  const query = String(searchQuery || '').toLowerCase();
+  const queryTokens = tokenizeResumeQuery(query);
+
+  if (/(product manager|product owner|\bproduct\b|\bpm\b)/i.test(query)) {
+    return {
+      role: 'product',
+      queryTokens,
+      requiredAnyTokens: ['product', 'pm'],
+      positiveTokens: ['product', 'pm', 'manager', 'owner'],
+      disallowedTokens: ['sde', 'developer', 'engineer', 'software', 'frontend', 'backend', 'fullstack'],
+    };
+  }
+
+  if (/(data analyst|business analyst|\banalyst\b|analytics)/i.test(query)) {
+    return {
+      role: 'analyst',
+      queryTokens,
+      requiredAnyTokens: ['analyst', 'analytics', 'data'],
+      positiveTokens: ['analyst', 'analytics', 'data', 'bi', 'reporting'],
+      disallowedTokens: ['product', 'pm', 'manager', 'sde', 'developer', 'engineer', 'software'],
+    };
+  }
+
+  if (/(software engineer|developer|\bsde\b|frontend|backend|fullstack|\bengineer\b)/i.test(query)) {
+    return {
+      role: 'engineering',
+      queryTokens,
+      requiredAnyTokens: ['engineer', 'developer', 'sde', 'software', 'frontend', 'backend', 'fullstack'],
+      positiveTokens: ['engineer', 'developer', 'sde', 'software', 'frontend', 'backend', 'fullstack'],
+      disallowedTokens: ['product', 'pm', 'manager', 'analyst', 'analytics'],
+    };
+  }
+
+  return {
+    role: 'generic',
+    queryTokens,
+    requiredAnyTokens: queryTokens.filter((t) => t.length > 2).slice(0, 2),
+    positiveTokens: queryTokens,
+    disallowedTokens: [],
+  };
+}
+
+function countTokenHits(text, tokens = []) {
+  const hay = normalizeResumeToken(text);
+  if (!hay) return 0;
+  let hits = 0;
+  for (const token of tokens) {
+    const normalizedToken = normalizeResumeToken(token);
+    if (!normalizedToken) continue;
+    if (hay.includes(normalizedToken)) hits += 1;
+  }
+  return hits;
+}
+
+function scoreResumeForQuery(resume, intentProfile) {
+  const fileName = String(resume.file_name || '');
+  const parsed = resume.parsed_data || {};
+  const skills = Array.isArray(parsed.skills) ? parsed.skills.join(' ') : '';
+  const titles = [parsed.title, parsed.headline, parsed.summary].filter(Boolean).join(' ');
+  const combined = `${fileName} ${skills} ${titles}`.toLowerCase();
+
+  const queryHits = countTokenHits(combined, intentProfile.queryTokens);
+  const positiveHits = countTokenHits(combined, intentProfile.positiveTokens);
+  const requiredHits = countTokenHits(combined, intentProfile.requiredAnyTokens);
+  const negativeHits = countTokenHits(combined, intentProfile.disallowedTokens);
+
+  let score = 0;
+  score += queryHits * 2;
+  score += positiveHits * 3;
+  score += requiredHits * 5;
+  score -= negativeHits * 5;
+
+  // Strong guard for role-based mapping: required token missing should be costly.
+  if (intentProfile.role !== 'generic' && intentProfile.requiredAnyTokens.length && requiredHits === 0) {
+    score -= 8;
+  }
+
+  return {
+    resume,
+    fileName,
+    score,
+    queryHits,
+    positiveHits,
+    requiredHits,
+    negativeHits,
+  };
+}
+
+// Fetch resumes and return deterministic selection + confidence.
 async function fetchAndSelectResume(searchQuery) {
   const headers = await getAuthHeaders();
-  if (!headers.Authorization) return null;
+  if (!headers.Authorization) return { resume: null, confident: false, reason: 'not_authenticated', intentProfile: buildResumeIntentProfile(searchQuery) };
+
+  const intentProfile = buildResumeIntentProfile(searchQuery);
 
   try {
     const res = await fetch(`${API_URL}/resume/all`, { headers });
-    if (!res.ok) return null;
+    if (!res.ok) return { resume: null, confident: false, reason: 'resume_fetch_failed', intentProfile };
     const data = await res.json();
     const resumes = data?.data || [];
-    if (!resumes.length) return null;
-    if (resumes.length === 1) return resumes[0];
-
-    const queryTokens = (searchQuery || '')
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((t) => t.length > 2);
-
-    let bestResume = resumes[0];
-    let bestScore = scoreResumeForQuery(resumes[0], queryTokens);
-
-    for (let i = 1; i < resumes.length; i++) {
-      const score = scoreResumeForQuery(resumes[i], queryTokens);
-      if (score > bestScore) {
-        bestScore = score;
-        bestResume = resumes[i];
-      }
+    if (!resumes.length) return { resume: null, confident: false, reason: 'no_resumes', intentProfile };
+    if (resumes.length === 1) {
+      return { resume: resumes[0], confident: true, reason: 'single_resume', intentProfile, bestScore: 100, margin: 100 };
     }
 
-    return bestResume;
+    const ranked = resumes
+      .map((resume) => scoreResumeForQuery(resume, intentProfile))
+      .sort((a, b) => b.score - a.score);
+
+    const best = ranked[0];
+    const second = ranked[1] || null;
+    const margin = second ? best.score - second.score : best.score;
+
+    let confident = true;
+    let reason = 'confident';
+
+    if (best.score < RESUME_SELECT_MIN_SCORE) {
+      confident = false;
+      reason = `low_score:${best.score}`;
+    } else if (margin < RESUME_SELECT_MIN_MARGIN) {
+      confident = false;
+      reason = `low_margin:${margin}`;
+    } else if (intentProfile.role !== 'generic' && best.requiredHits === 0) {
+      confident = false;
+      reason = 'required_tokens_missing';
+    } else if (best.negativeHits > 0 && best.requiredHits === 0) {
+      confident = false;
+      reason = 'negative_tokens_detected';
+    }
+
+    return {
+      resume: confident ? best.resume : null,
+      candidate: best.resume,
+      confident,
+      reason,
+      bestScore: best.score,
+      margin,
+      intentProfile,
+      diagnostics: {
+        bestFile: best.fileName,
+        bestRequiredHits: best.requiredHits,
+        bestNegativeHits: best.negativeHits,
+      },
+    };
   } catch {
-    return null;
+    return { resume: null, confident: false, reason: 'resume_select_exception', intentProfile };
   }
 }
 
@@ -475,9 +600,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       const searchQuery = message.config?.searchQuery || '';
-      const selectedResume = await fetchAndSelectResume(searchQuery);
-      if (selectedResume) {
-        emitAgentLog(`Resume selected for "${searchQuery}": ${selectedResume.file_name}`).catch(() => {});
+      const resumeSelection = await fetchAndSelectResume(searchQuery);
+      if (resumeSelection?.confident && resumeSelection?.resume) {
+        emitAgentLog(`Resume selected for "${searchQuery}": ${resumeSelection.resume.file_name} (score=${resumeSelection.bestScore}, margin=${resumeSelection.margin})`).catch(() => {});
+      } else if (resumeSelection?.candidate) {
+        emitAgentLog(
+          `Resume selection low-confidence for "${searchQuery}" (${resumeSelection.reason}). Candidate was "${resumeSelection.candidate.file_name}". Submit will be blocked unless intent matches.`,
+          true
+        ).catch(() => {});
       }
 
       startAgent({
@@ -485,7 +615,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         taskId,
         source: message.config?.source || 'extension',
         channel: message.config?.channel || 'extension_popup',
-        selectedResume: selectedResume || null,
+        selectedResume: resumeSelection?.resume || null,
+        resumeIntentTokens: resumeSelection?.intentProfile?.requiredAnyTokens || [],
+        resumeDisallowedTokens: resumeSelection?.intentProfile?.disallowedTokens || [],
+        resumeSelectionConfident: Boolean(resumeSelection?.confident),
       });
       startLiveRecording();
       sendResponse({ success: true, taskId });
@@ -661,10 +794,19 @@ async function pollFrontendCommands() {
       agentSessionId: cmd.id,
     };
 
-    const selectedResume = await fetchAndSelectResume(searchQuery);
-    if (selectedResume) {
-      config.selectedResume = selectedResume;
+    const resumeSelection = await fetchAndSelectResume(searchQuery);
+    if (resumeSelection?.resume) {
+      config.selectedResume = resumeSelection.resume;
+      emitAgentLog(`Resume selected for "${searchQuery}": ${resumeSelection.resume.file_name} (score=${resumeSelection.bestScore}, margin=${resumeSelection.margin})`).catch(() => {});
+    } else if (resumeSelection?.candidate) {
+      emitAgentLog(
+        `Resume selection low-confidence for "${searchQuery}" (${resumeSelection.reason}). Candidate was "${resumeSelection.candidate.file_name}". Submit will be blocked unless intent matches.`,
+        true
+      ).catch(() => {});
     }
+    config.resumeIntentTokens = resumeSelection?.intentProfile?.requiredAnyTokens || [];
+    config.resumeDisallowedTokens = resumeSelection?.intentProfile?.disallowedTokens || [];
+    config.resumeSelectionConfident = Boolean(resumeSelection?.confident);
 
     startAgent(config);
     startLiveRecording();
@@ -703,10 +845,19 @@ async function pollTelegramBridge() {
         channel: 'telegram_bot',
       };
 
-      const selectedResume = await fetchAndSelectResume(config.searchQuery);
-      if (selectedResume) {
-        config.selectedResume = selectedResume;
+      const resumeSelection = await fetchAndSelectResume(config.searchQuery);
+      if (resumeSelection?.resume) {
+        config.selectedResume = resumeSelection.resume;
+        emitAgentLog(`Resume selected for "${config.searchQuery}": ${resumeSelection.resume.file_name} (score=${resumeSelection.bestScore}, margin=${resumeSelection.margin})`).catch(() => {});
+      } else if (resumeSelection?.candidate) {
+        emitAgentLog(
+          `Resume selection low-confidence for "${config.searchQuery}" (${resumeSelection.reason}). Candidate was "${resumeSelection.candidate.file_name}". Submit will be blocked unless intent matches.`,
+          true
+        ).catch(() => {});
       }
+      config.resumeIntentTokens = resumeSelection?.intentProfile?.requiredAnyTokens || [];
+      config.resumeDisallowedTokens = resumeSelection?.intentProfile?.disallowedTokens || [];
+      config.resumeSelectionConfident = Boolean(resumeSelection?.confident);
 
       startAgent(config);
       startLiveRecording();
