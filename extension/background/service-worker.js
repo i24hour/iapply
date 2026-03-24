@@ -258,6 +258,8 @@ async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '' 
     return { success: false, error: 'no_frame_available' };
   }
 
+  const captureId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const capturePath = `memory://agent-captures/${captureId}-${source}.jpeg`;
   lastCapturedAgentFrame = dataUrl;
   lastCapturedAgentFrameAt = Date.now();
 
@@ -281,6 +283,7 @@ async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '' 
     uploaded,
     source,
     imageDataUrl: dataUrl,
+    capturePath,
   };
 }
 

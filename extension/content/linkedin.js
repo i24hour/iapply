@@ -1828,6 +1828,66 @@ async function executeAgentAction(decision) {
   }
 }
 
+function findPrimaryProgressButtonInModal(modal = getEasyApplyModal()) {
+  if (!modal) return null;
+  const buttons = Array.from(modal.querySelectorAll('button, [role="button"]')).filter((btn) => isElementVisible(btn));
+  const candidates = buttons.filter((btn) => {
+    const text = normalizeText(btn.innerText || btn.textContent || btn.getAttribute('aria-label') || '');
+    if (!text) return false;
+    if (text.includes('back') || text.includes('cancel') || text.includes('dismiss') || text.includes('save draft')) return false;
+    return text.includes('next') || text.includes('review') || text.includes('continue') || text.includes('submit');
+  });
+  return candidates[0] || null;
+}
+
+async function executeVisionRecoveryAction(message) {
+  const visionAction = String(message.visionAction || 'RETRY').toUpperCase();
+  const modal = getEasyApplyModal();
+
+  if (visionAction === 'CLICK_NEXT') {
+    const progressBtn = findPrimaryProgressButtonInModal(modal);
+    if (progressBtn) {
+      await forceClickElement(progressBtn);
+      return { success: true, executedAction: 'CLICK_NEXT' };
+    }
+    return { success: false, executedAction: 'CLICK_NEXT' };
+  }
+
+  if (visionAction === 'SELECT_RESUME') {
+    let selected = await autoSelectBestResume(message.preferredResumeName, message.resumeKeyword, message.titleTokens);
+    if (!selected?.selectionCommitted) {
+      const fixed = await resolveResumeRequirementError(modal);
+      if (fixed) {
+        selected = { selectionCommitted: true };
+      }
+    }
+    return { success: Boolean(selected?.selectionCommitted), executedAction: 'SELECT_RESUME' };
+  }
+
+  if (visionAction === 'CHECK_BOX') {
+    const target = findAgreementCheckboxContainer(modal) || modal?.querySelector('input[type="checkbox"]');
+    if (target) {
+      const checked = await ensureCheckboxChecked(target);
+      return { success: checked, executedAction: 'CHECK_BOX' };
+    }
+    return { success: false, executedAction: 'CHECK_BOX' };
+  }
+
+  if (visionAction === 'FILL_FIELD') {
+    const result = await autoFixModalValidationIssues();
+    return {
+      success: (result?.fixed || 0) > 0 || (result?.remaining || 0) === 0,
+      executedAction: 'FILL_FIELD',
+    };
+  }
+
+  const retryFix = await autoFixModalValidationIssues();
+  return {
+    success: Boolean((retryFix?.fixed || 0) > 0),
+    executedAction: 'RETRY',
+  };
+}
+
 // Wait for element to appear
 function waitForElement(selector, timeout = 10000) {
   return new Promise((resolve, reject) => {
@@ -1906,6 +1966,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'execute_decision') {
     executeAgentAction(message.decision).then(() => {
       sendResponse({ success: true });
+    });
+    return true;
+  }
+
+  if (message.action === 'vision_recovery_action') {
+    executeVisionRecoveryAction(message).then((result) => {
+      sendResponse(result || { success: false, executedAction: 'RETRY' });
     });
     return true;
   }
