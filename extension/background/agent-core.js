@@ -752,6 +752,17 @@ async function runAgentLoop() {
         }
         progressNoAdvanceCount += 1;
         internalMismatchRetryCount += 1;
+
+        // If lock keeps blocking on the same unchanged step, stop trusting
+        // the internal lock and allow another direct progress click.
+        if (progressNoAdvanceCount >= 3) {
+          broadcastLog(
+            `Progress lock bypass after ${progressNoAdvanceCount} blocked attempts on the same step. Forcing another progress click.`,
+            true,
+          );
+          progressTransitionLock = null;
+          internalMismatchRetryCount = 0;
+        } else {
         broadcastLog(
           `Progress lock active: waiting for step transition before another "${decision.action}" on Next/Review. Blocked attempt ${progressNoAdvanceCount}.`,
           true,
@@ -772,6 +783,7 @@ async function runAgentLoop() {
         }
         // Never permanently block progress based only on internal flags.
         broadcastLog('Recovery unavailable. Allowing guarded progress click to avoid permanent block.', true);
+        }
       }
 
       if (!isOutreach && !resumeSelectionCommitted && isProgressClickDecision(decision, snapshot)) {
@@ -1386,12 +1398,7 @@ function pickDeterministicRecoveryAction(snapshot, validationSummary = '') {
     return 'CHECK_BOX';
   }
 
-  const hasVisibleValidationIssue = elements.some((element) => {
-    if (isPrimaryProgressButton(element)) return false;
-    if (element?.invalid) return true;
-    if (element?.required && !hasMeaningfulFieldValue(element)) return true;
-    return false;
-  });
+  const hasVisibleValidationIssue = elements.some((element) => hasActionableValidationIssue(element));
   if (hasVisibleValidationIssue || /form_validation_errors|enter a decimal number|select checkbox to proceed|select an option/.test(combined)) {
     return 'FILL_FIELD';
   }
@@ -1413,6 +1420,8 @@ async function executeDeterministicRecoveryAction(recoveryAction, snapshot) {
       preferredResumeName: resumeHints.preferredResumeName,
       resumeKeyword: resumeHints.resumeKeyword,
       titleTokens: resumeHints.titleTokens,
+      expectedTokens: resumeHints.intentTokens,
+      disallowedTokens: resumeHints.disallowedTokens,
     }).catch(() => null);
     return { success: Boolean(result?.selectionCommitted), executedAction: 'SELECT_RESUME' };
   }
@@ -1517,6 +1526,24 @@ function hasNumericToken(value) {
   return /-?\d+(?:\.\d+)?/.test(String(value || ''));
 }
 
+function hasActionableValidationIssue(element) {
+  if (!element || isPrimaryProgressButton(element)) return false;
+  if (element.required && !hasMeaningfulFieldValue(element)) return true;
+  if (!element.invalid) return false;
+
+  const hasExplicitError = Boolean(String(element.errorText || '').trim());
+  if (hasExplicitError) return true;
+
+  if (shouldOverwriteInvalidFilledField(element)) return true;
+
+  if (isDropdownSnapshotElement(element) && !hasMeaningfulFieldValue(element)) {
+    return true;
+  }
+
+  // Some controls report invalid=true transiently even when value is already set.
+  return false;
+}
+
 function shouldOverwriteInvalidFilledField(element) {
   if (!element?.invalid) return false;
   const combinedValue = `${element?.value || ''} ${element?.text || ''}`.trim();
@@ -1588,12 +1615,7 @@ function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
   // Priority 2: Clicking the progress button IS the stuck action, so
   // there is a real validation blocker. Fix the first truly empty field.
   const emptyRequiredField = elements.find((element) => {
-    if (isPrimaryProgressButton(element)) return false;
-    // Keep prefilled valid-looking values, but overwrite clearly invalid values
-    // when they don't match expected numeric format.
-    if (element.invalid && hasMeaningfulFieldValue(element) && !shouldOverwriteInvalidFilledField(element)) return false;
-    return (element.required && !hasMeaningfulFieldValue(element)) ||
-           element.invalid;
+    return hasActionableValidationIssue(element);
   });
 
   if (emptyRequiredField) {
