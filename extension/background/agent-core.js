@@ -700,12 +700,23 @@ async function runAgentLoop() {
 
           const verifiedBySelection = Boolean(verifyResult?.matched);
           const observedResumeName = String(verifyResult?.selectedName || '').trim();
+          const selectionCommitted = Boolean(verifyResult?.selectionCommitted);
+          const hasResumeRequiredError = /resume is required/i.test(String(snapshot?.rawText || '').toLowerCase());
 
           if (verifiedBySelection) {
             resumeVerifiedForCurrentApplication = true;
             resumeEditAttempts = 0;
             broadcastLog(
               `Resume verification passed before "${targetText || 'progress'}"${observedResumeName ? ` (selected: ${observedResumeName})` : ''}.`
+            );
+          } else if (selectionCommitted && !hasResumeRequiredError) {
+            // Loop-breaker: if the content script confirms resume selection is committed
+            // and there is no explicit "resume is required" error, allow submit flow.
+            resumeVerifiedForCurrentApplication = true;
+            resumeEditAttempts = 0;
+            broadcastLog(
+              `Resume gate bypassed using committed selection before "${targetText || 'progress'}"${observedResumeName ? ` (selected: ${observedResumeName})` : ''}.`,
+              true,
             );
           } else {
             if (verifyResult?.corrected || verifyResult?.editOpened) {

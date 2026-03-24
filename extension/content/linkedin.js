@@ -12,6 +12,8 @@ const processedPostKeys = new Set();
 let runtimeMessagingDisabled = false;
 let lastAgentLogKey = '';
 let lastAgentLogAt = 0;
+let lastCommittedResumeName = '';
+let lastCommittedResumeAt = 0;
 
 // Human simulation delays
 const DELAYS = {
@@ -1670,6 +1672,20 @@ function normalizeResumeName(value) {
     .trim();
 }
 
+function rememberCommittedResume(name = '') {
+  const normalized = String(name || '').trim();
+  if (!normalized) return;
+  lastCommittedResumeName = normalized;
+  lastCommittedResumeAt = Date.now();
+}
+
+function getRecentlyCommittedResumeName() {
+  const MAX_AGE_MS = 10 * 60 * 1000;
+  if (!lastCommittedResumeName) return '';
+  if (Date.now() - lastCommittedResumeAt > MAX_AGE_MS) return '';
+  return lastCommittedResumeName;
+}
+
 const RESUME_TOKEN_SYNONYMS = {
   software: ['software', 'developer', 'engineer', 'sde', 'programmer', 'coder', 'fullstack', 'full stack', 'frontend', 'backend'],
   developer: ['developer', 'dev', 'engineer', 'sde', 'software', 'programmer', 'coder'],
@@ -1840,6 +1856,10 @@ async function autoSelectBestResume(
   if (!resumeCards.length) {
     const resumeSectionPresent = /be sure to include an updated resume|upload resume|a resume is required|show more resumes|resume is required/i.test(modal.innerText || '');
     const committedWithoutCards = resumeSectionPresent && !hasResumeRequirementError(modal);
+    if (committedWithoutCards) {
+      const visibleName = getDisplayedResumeName(modal) || getRecentlyCommittedResumeName();
+      if (visibleName) rememberCommittedResume(visibleName);
+    }
     return {
       changed: false,
       reason: resumeSectionPresent ? 'resume section present but no selectable cards found' : 'no resume cards found',
@@ -1947,11 +1967,13 @@ async function autoSelectBestResume(
 
   if (currentlySelectedCard && currentlySelectedCard.card === targetCard.card) {
     if (currentlySelectedCard.committed) {
+      rememberCommittedResume(targetCard.name);
       postAgentLog(`Best resume "${targetCard.name}" is already selected and committed (${targetType}).`);
       return { changed: false, reason: 'already correct', selectedName: targetCard.name, selectionCommitted: true };
     }
     postAgentLog(`Resume "${targetCard.name}" is checked but not committed. Re-confirming selection...`);
     const recommitted = await commitResumeSelection(targetCard.card);
+    if (recommitted) rememberCommittedResume(targetCard.name);
     return {
       changed: false,
       reason: recommitted ? 'reconfirmed current selection' : 'selection did not commit',
@@ -1986,6 +2008,7 @@ async function autoSelectBestResume(
     postAgentLog(`Resume "${targetCard.name}" still does not look committed after selection attempt.`, true);
     return { changed: false, reason: 'selection did not commit', selectedName: targetCard.name, selectionCommitted: false };
   }
+  rememberCommittedResume(targetCard.name);
   postAgentLog(`Resume "${targetCard.name}" is now committed for this application step.`);
 
   return { changed: true, selectedName: targetCard.name, selectionCommitted: true };
@@ -2344,19 +2367,30 @@ async function verifyPreferredResumeInModal(
     return { matched: false, selectedName: '', corrected: false, reason: 'no easy apply modal' };
   }
 
-  const selectedBefore = getDisplayedResumeName(modal);
+  const selectedBeforeVisible = getDisplayedResumeName(modal);
+  const selectedBefore = selectedBeforeVisible || getRecentlyCommittedResumeName();
+  const hasResumeRequiredBefore = hasResumeRequirementError(modal);
   const preferredProvided = Boolean(String(preferredResumeName || '').trim());
+  const preferredConflictsIntent = preferredProvided && !resumeNameMatchesIntent(preferredResumeName, expectedTokens, disallowedTokens);
   const matchesPreferredBefore = preferredProvided
     ? resumeNameLikelyMatchesPreferred(selectedBefore, preferredResumeName)
     : true;
   const matchesIntentBefore = resumeNameMatchesIntent(selectedBefore, expectedTokens, disallowedTokens);
-  const initialMatch = matchesPreferredBefore && matchesIntentBefore;
+  const initialMatch = matchesIntentBefore && (matchesPreferredBefore || preferredConflictsIntent || !preferredProvided);
   if (initialMatch) {
+    if (selectedBefore) rememberCommittedResume(selectedBefore);
     return { matched: true, selectedName: selectedBefore, corrected: false, reason: 'already matching' };
   }
 
   if (!forceFix) {
     return { matched: false, selectedName: selectedBefore, corrected: false, reason: 'mismatch' };
+  }
+
+  // If no resume-required error is visible and we recently committed an intent-matching
+  // resume in this modal flow, avoid opening Edit repeatedly.
+  if (!hasResumeRequiredBefore && selectedBefore && matchesIntentBefore) {
+    rememberCommittedResume(selectedBefore);
+    return { matched: true, selectedName: selectedBefore, corrected: false, reason: 'matched_from_cached_commit' };
   }
 
   let corrected = false;
@@ -2372,14 +2406,22 @@ async function verifyPreferredResumeInModal(
   );
   if (autoResult?.changed) corrected = true;
 
-  const selectedAfter = getDisplayedResumeName(getEasyApplyModal());
-  const candidateAfter = selectedAfter || autoResult?.selectedName || '';
+  const modalAfter = getEasyApplyModal();
+  const hasResumeRequiredAfter = hasResumeRequirementError(modalAfter);
+  const selectedAfter = getDisplayedResumeName(modalAfter);
+  const candidateAfter = selectedAfter || autoResult?.selectedName || getRecentlyCommittedResumeName() || '';
   const matchesPreferredAfter = preferredProvided
     ? (resumeNameLikelyMatchesPreferred(candidateAfter, preferredResumeName) ||
        resumeNameLikelyMatchesPreferred(autoResult?.selectedName || '', preferredResumeName))
     : true;
   const matchesIntentAfter = resumeNameMatchesIntent(candidateAfter, expectedTokens, disallowedTokens);
-  const matchedAfter = matchesPreferredAfter && matchesIntentAfter;
+  const matchedAfter =
+    (matchesIntentAfter && (matchesPreferredAfter || preferredConflictsIntent || !preferredProvided)) ||
+    (Boolean(autoResult?.selectionCommitted) && !hasResumeRequiredAfter && matchesIntentAfter);
+
+  if (matchedAfter && candidateAfter) {
+    rememberCommittedResume(candidateAfter);
+  }
 
   return {
     matched: matchedAfter,
@@ -2387,6 +2429,7 @@ async function verifyPreferredResumeInModal(
     corrected,
     reason: matchedAfter ? 'matched_after_fix' : (autoResult?.reason || 'mismatch_after_fix'),
     editOpened: Boolean(editResult?.opened),
+    selectionCommitted: Boolean(autoResult?.selectionCommitted),
   };
 }
 
