@@ -347,6 +347,8 @@ async function runAgentLoop() {
           preferredResumeName: resumeHints.preferredResumeName,
           resumeKeyword: resumeHints.resumeKeyword,
           titleTokens: resumeHints.titleTokens,
+          expectedTokens: resumeHints.intentTokens,
+          disallowedTokens: resumeHints.disallowedTokens,
         });
         resumeSelectionCommitted = Boolean(result?.selectionCommitted);
         const preferredResumeNameForCheck = settings?.selectedResume?.file_name || '';
@@ -1338,7 +1340,14 @@ function buildResumeRecoveryHints() {
   const disallowedTokens = Array.isArray(settings.resumeDisallowedTokens) ? settings.resumeDisallowedTokens.filter(Boolean) : [];
   const resumeKeyword = hintMatch?.[1]?.toLowerCase() || intentTokens[0]?.toLowerCase() || null;
   const titleTokens = (settings.searchQuery || '').toLowerCase().split(/\s+/).filter((t) => t.length > 2);
-  const preferredResumeName = settings?.selectedResume?.file_name || '';
+  const preferredResumeNameRaw = settings?.selectedResume?.file_name || '';
+  const preferredMatchesIntent = preferredResumeNameRaw
+    ? resumeNameMatchesIntent(preferredResumeNameRaw, intentTokens, disallowedTokens)
+    : false;
+  const preferredResumeName =
+    preferredResumeNameRaw && intentTokens.length > 0 && !preferredMatchesIntent
+      ? ''
+      : preferredResumeNameRaw;
   return { preferredResumeName, resumeKeyword, titleTokens, intentTokens, disallowedTokens };
 }
 

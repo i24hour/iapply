@@ -1530,6 +1530,55 @@ function normalizeResumeName(value) {
     .trim();
 }
 
+const RESUME_TOKEN_SYNONYMS = {
+  software: ['software', 'developer', 'engineer', 'sde', 'programmer', 'coder', 'fullstack', 'full stack', 'frontend', 'backend'],
+  developer: ['developer', 'dev', 'engineer', 'sde', 'software', 'programmer', 'coder'],
+  dev: ['developer', 'dev', 'engineer', 'sde', 'software'],
+  engineer: ['engineer', 'developer', 'sde', 'software', 'programmer', 'coder'],
+  sde: ['sde', 'software', 'developer', 'engineer'],
+  frontend: ['frontend', 'front end', 'front-end', 'ui', 'web', 'developer', 'engineer'],
+  'front end': ['frontend', 'front end', 'front-end', 'ui', 'web', 'developer', 'engineer'],
+  backend: ['backend', 'back end', 'back-end', 'api', 'server', 'developer', 'engineer'],
+  'back end': ['backend', 'back end', 'back-end', 'api', 'server', 'developer', 'engineer'],
+  fullstack: ['fullstack', 'full stack', 'full-stack', 'frontend', 'backend', 'developer', 'engineer'],
+  'full stack': ['fullstack', 'full stack', 'full-stack', 'frontend', 'backend', 'developer', 'engineer'],
+  product: ['product', 'pm', 'product manager', 'product owner'],
+  pm: ['pm', 'product', 'product manager', 'product owner'],
+  analyst: ['analyst', 'analytics', 'data', 'business analyst'],
+  analytics: ['analytics', 'analyst', 'data', 'bi'],
+};
+
+function expandResumeIntentTokens(tokens = []) {
+  const expanded = new Set();
+  const queue = Array.isArray(tokens) ? tokens : [];
+
+  for (const rawToken of queue) {
+    const normalized = normalizeResumeName(rawToken);
+    if (!normalized || normalized.length < 2) continue;
+    expanded.add(normalized);
+    const aliases = RESUME_TOKEN_SYNONYMS[normalized] || [];
+    for (const alias of aliases) {
+      const normalizedAlias = normalizeResumeName(alias);
+      if (normalizedAlias && normalizedAlias.length >= 2) {
+        expanded.add(normalizedAlias);
+      }
+    }
+  }
+
+  return Array.from(expanded);
+}
+
+function countResumeKeywordHits(nameLower, tokens = []) {
+  if (!nameLower || !Array.isArray(tokens) || !tokens.length) return 0;
+  let hits = 0;
+  for (const token of tokens) {
+    const normalized = normalizeResumeName(token);
+    if (!normalized) continue;
+    if (nameLower.includes(normalized)) hits += 1;
+  }
+  return hits;
+}
+
 function resumeNameLikelyMatchesPreferred(candidateName, preferredName) {
   const candidate = normalizeResumeName(candidateName);
   const preferred = normalizeResumeName(preferredName);
@@ -1632,7 +1681,13 @@ async function revealAllResumeOptions(modal) {
   return expanded;
 }
 
-async function autoSelectBestResume(preferredResumeName, resumeKeyword, titleTokens) {
+async function autoSelectBestResume(
+  preferredResumeName,
+  resumeKeyword,
+  titleTokens,
+  expectedTokens = [],
+  disallowedTokens = []
+) {
   const modal = getEasyApplyModal();
   if (!modal) return { changed: false, reason: 'no modal' };
 
@@ -1652,15 +1707,14 @@ async function autoSelectBestResume(preferredResumeName, resumeKeyword, titleTok
     };
   }
 
-  // Step 3: Build keyword list
-  const keywords = [];
-  if (resumeKeyword) keywords.push(resumeKeyword.toLowerCase());
-  if (Array.isArray(titleTokens)) {
-    for (const t of titleTokens) {
-      const lower = t.toLowerCase();
-      if (lower.length > 2 && !keywords.includes(lower)) keywords.push(lower);
-    }
-  }
+  // Step 3: Build intent keyword sets (with synonyms)
+  const keywordSeeds = [];
+  if (resumeKeyword) keywordSeeds.push(resumeKeyword.toLowerCase());
+  if (Array.isArray(titleTokens)) keywordSeeds.push(...titleTokens);
+  if (Array.isArray(expectedTokens)) keywordSeeds.push(...expectedTokens);
+  const keywords = expandResumeIntentTokens(keywordSeeds);
+  const expectedExpanded = expandResumeIntentTokens(Array.isArray(expectedTokens) ? expectedTokens : []);
+  const disallowedExpanded = expandResumeIntentTokens(Array.isArray(disallowedTokens) ? disallowedTokens : []);
 
   // Step 4: Evaluate cards and track current selection state.
   let bestCard = null;
@@ -1690,10 +1744,17 @@ async function autoSelectBestResume(preferredResumeName, resumeKeyword, titleTok
       preferredBestCard = { card, name, radio, committed, preferredScore };
     }
 
+    const keywordHits = countResumeKeywordHits(nameLower, keywords);
+    const expectedHits = countResumeKeywordHits(nameLower, expectedExpanded);
+    const disallowedHits = countResumeKeywordHits(nameLower, disallowedExpanded);
+    const intentMatch = resumeNameMatchesIntent(name, expectedExpanded, disallowedExpanded);
+
     let score = 0;
-    for (const kw of keywords) {
-      if (nameLower.includes(kw)) score++;
-    }
+    score += keywordHits * 2;
+    score += expectedHits * 4;
+    score -= disallowedHits * 6;
+    if (expectedExpanded.length > 0 && expectedHits === 0) score -= 4;
+    if (!intentMatch) score -= 2;
 
     // Parse "Last used on M/DD/YYYY" for tiebreaking
     const cardText = (card.textContent || '').replace(/\s+/g, ' ');
@@ -1707,11 +1768,24 @@ async function autoSelectBestResume(preferredResumeName, resumeKeyword, titleTok
       bestLastUsed = lastUsed;
       bestCard = { card, name, radio, score, committed };
     }
+
+    if (currentlySelectedCard && currentlySelectedCard.card === card) {
+      currentlySelectedCard.score = score;
+      currentlySelectedCard.intentMatch = intentMatch;
+    }
   }
 
-  const targetCard = preferredBestCard && preferredBestScore > 0 ? preferredBestCard : bestCard;
-  const targetType = preferredBestCard && preferredBestScore > 0 ? 'preferred_name' : 'keyword';
-  const targetScore = preferredBestCard && preferredBestScore > 0 ? preferredBestScore : bestScore;
+  const preferredIntentMatch = preferredBestCard
+    ? resumeNameMatchesIntent(preferredBestCard.name, expectedExpanded, disallowedExpanded)
+    : false;
+  const canUsePreferred = Boolean(
+    preferredBestCard &&
+    preferredBestScore > 0 &&
+    (expectedExpanded.length === 0 || preferredIntentMatch)
+  );
+  const targetCard = canUsePreferred ? preferredBestCard : bestCard;
+  const targetType = canUsePreferred ? 'preferred_name' : 'keyword';
+  const targetScore = canUsePreferred ? preferredBestScore : bestScore;
 
   if (!targetCard || targetScore <= 0) {
     const selectedCommitted = Boolean(currentlySelectedCard?.committed);
@@ -1743,6 +1817,23 @@ async function autoSelectBestResume(preferredResumeName, resumeKeyword, titleTok
       reason: recommitted ? 'reconfirmed current selection' : 'selection did not commit',
       selectedName: targetCard.name,
       selectionCommitted: recommitted,
+    };
+  }
+
+  if (
+    currentlySelectedCard &&
+    currentlySelectedCard.committed &&
+    currentlySelectedCard.intentMatch &&
+    Number(currentlySelectedCard.score || -999) >= Number(targetScore || -1000)
+  ) {
+    postAgentLog(
+      `Keeping already committed resume "${currentlySelectedCard.name}" (intent-matched, score=${currentlySelectedCard.score}).`
+    );
+    return {
+      changed: false,
+      reason: 'kept_committed_intent_match',
+      selectedName: currentlySelectedCard.name,
+      selectionCommitted: true,
     };
   }
 
@@ -2124,7 +2215,13 @@ async function verifyPreferredResumeInModal(
   const editResult = await openResumeEditFromReview();
   corrected = Boolean(editResult?.opened);
 
-  const autoResult = await autoSelectBestResume(preferredResumeName, resumeKeyword, titleTokens);
+  const autoResult = await autoSelectBestResume(
+    preferredResumeName,
+    resumeKeyword,
+    titleTokens,
+    expectedTokens,
+    disallowedTokens
+  );
   if (autoResult?.changed) corrected = true;
 
   const selectedAfter = getDisplayedResumeName(getEasyApplyModal());
@@ -2249,7 +2346,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'auto_select_resume') {
-    autoSelectBestResume(message.preferredResumeName, message.resumeKeyword, message.titleTokens).then((result) => {
+    autoSelectBestResume(
+      message.preferredResumeName,
+      message.resumeKeyword,
+      message.titleTokens,
+      message.expectedTokens,
+      message.disallowedTokens
+    ).then((result) => {
       sendResponse(result);
     });
     return true;

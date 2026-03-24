@@ -386,8 +386,10 @@ function buildResumeIntentProfile(searchQuery = '') {
       role: 'product',
       queryTokens,
       requiredAnyTokens: ['product', 'pm'],
-      positiveTokens: ['product', 'pm', 'manager', 'owner'],
-      disallowedTokens: ['sde', 'developer', 'engineer', 'software', 'frontend', 'backend', 'fullstack'],
+      positiveTokens: ['product', 'pm', 'manager', 'owner', 'roadmap', 'strategy'],
+      disallowedTokens: [
+        'sde', 'developer', 'engineer', 'software', 'frontend', 'front end', 'backend', 'back end', 'fullstack', 'full stack',
+      ],
     };
   }
 
@@ -396,8 +398,8 @@ function buildResumeIntentProfile(searchQuery = '') {
       role: 'analyst',
       queryTokens,
       requiredAnyTokens: ['analyst', 'analytics', 'data'],
-      positiveTokens: ['analyst', 'analytics', 'data', 'bi', 'reporting'],
-      disallowedTokens: ['product', 'pm', 'manager', 'sde', 'developer', 'engineer', 'software'],
+      positiveTokens: ['analyst', 'analytics', 'data', 'bi', 'reporting', 'sql'],
+      disallowedTokens: ['product', 'pm', 'manager', 'sde', 'developer', 'engineer', 'software', 'frontend', 'backend'],
     };
   }
 
@@ -405,9 +407,15 @@ function buildResumeIntentProfile(searchQuery = '') {
     return {
       role: 'engineering',
       queryTokens,
-      requiredAnyTokens: ['engineer', 'developer', 'sde', 'software', 'frontend', 'backend', 'fullstack'],
-      positiveTokens: ['engineer', 'developer', 'sde', 'software', 'frontend', 'backend', 'fullstack'],
-      disallowedTokens: ['product', 'pm', 'manager', 'analyst', 'analytics'],
+      requiredAnyTokens: [
+        'engineer', 'engineering', 'developer', 'dev', 'sde', 'software',
+        'frontend', 'front end', 'backend', 'back end', 'fullstack', 'full stack',
+      ],
+      positiveTokens: [
+        'engineer', 'engineering', 'developer', 'dev', 'sde', 'software', 'programmer', 'coder',
+        'frontend', 'front end', 'backend', 'back end', 'fullstack', 'full stack', 'web', 'application',
+      ],
+      disallowedTokens: ['product', 'pm', 'manager', 'analyst', 'analytics', 'data analyst', 'business analyst'],
     };
   }
 
