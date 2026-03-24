@@ -1840,54 +1840,6 @@ function findPrimaryProgressButtonInModal(modal = getEasyApplyModal()) {
   return candidates[0] || null;
 }
 
-async function executeVisionRecoveryAction(message) {
-  const visionAction = String(message.visionAction || 'RETRY').toUpperCase();
-  const modal = getEasyApplyModal();
-
-  if (visionAction === 'CLICK_NEXT') {
-    const progressBtn = findPrimaryProgressButtonInModal(modal);
-    if (progressBtn) {
-      await forceClickElement(progressBtn);
-      return { success: true, executedAction: 'CLICK_NEXT' };
-    }
-    return { success: false, executedAction: 'CLICK_NEXT' };
-  }
-
-  if (visionAction === 'SELECT_RESUME') {
-    let selected = await autoSelectBestResume(message.preferredResumeName, message.resumeKeyword, message.titleTokens);
-    if (!selected?.selectionCommitted) {
-      const fixed = await resolveResumeRequirementError(modal);
-      if (fixed) {
-        selected = { selectionCommitted: true };
-      }
-    }
-    return { success: Boolean(selected?.selectionCommitted), executedAction: 'SELECT_RESUME' };
-  }
-
-  if (visionAction === 'CHECK_BOX') {
-    const target = findAgreementCheckboxContainer(modal) || modal?.querySelector('input[type="checkbox"]');
-    if (target) {
-      const checked = await ensureCheckboxChecked(target);
-      return { success: checked, executedAction: 'CHECK_BOX' };
-    }
-    return { success: false, executedAction: 'CHECK_BOX' };
-  }
-
-  if (visionAction === 'FILL_FIELD') {
-    const result = await autoFixModalValidationIssues();
-    return {
-      success: (result?.fixed || 0) > 0 || (result?.remaining || 0) === 0,
-      executedAction: 'FILL_FIELD',
-    };
-  }
-
-  const retryFix = await autoFixModalValidationIssues();
-  return {
-    success: Boolean((retryFix?.fixed || 0) > 0),
-    executedAction: 'RETRY',
-  };
-}
-
 // Wait for element to appear
 function waitForElement(selector, timeout = 10000) {
   return new Promise((resolve, reject) => {
@@ -1966,13 +1918,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'execute_decision') {
     executeAgentAction(message.decision).then(() => {
       sendResponse({ success: true });
-    });
-    return true;
-  }
-
-  if (message.action === 'vision_recovery_action') {
-    executeVisionRecoveryAction(message).then((result) => {
-      sendResponse(result || { success: false, executedAction: 'RETRY' });
     });
     return true;
   }

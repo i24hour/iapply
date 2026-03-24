@@ -30,8 +30,7 @@ const MAX_REPEATS = 3; // If same action repeats this many times, skip it
 const STAGNATION_WINDOW = 4;
 const AUTO_DEBUG_CAPTURE_COOLDOWN_MS = 60000;
 const PROGRESS_TRANSITION_LOCK_TIMEOUT_MS = 7000;
-const VISION_RECOVERY_LOOP_DELAY_MS = 500;
-const VISION_FALLBACK_NETWORK_TIMEOUT_MS = 6500;
+const RECOVERY_LOOP_DELAY_MS = 500;
 
 // Constants
 const API_URL = 'https://iapply-telegram-bot.onrender.com';
@@ -366,8 +365,8 @@ async function runAgentLoop() {
       }
 
       if (internalMismatchRetryCount >= 3) {
-        broadcastLog(`Retry threshold reached (${internalMismatchRetryCount}). Triggering vision fallback.`, true);
-        const autoVision = await runVisionFallback(snapshot, {
+        broadcastLog(`Retry threshold reached (${internalMismatchRetryCount}). Triggering deterministic recovery.`, true);
+        const recoveryResult = await runDeterministicFallback(snapshot, {
           reason: `retry_count_${internalMismatchRetryCount}`,
           validationSummary,
           forceCapture: true,
@@ -375,9 +374,9 @@ async function runAgentLoop() {
         });
         // Reset after threshold fallback so we don't run the same expensive fallback every loop.
         internalMismatchRetryCount = 0;
-        if (autoVision?.executedAction) {
-          broadcastLog(`Vision fallback executed action: ${autoVision.executedAction}.`);
-          setTimeout(runAgentLoop, VISION_RECOVERY_LOOP_DELAY_MS);
+        if (recoveryResult?.executedAction) {
+          broadcastLog(`Recovery executed action: ${recoveryResult.executedAction}.`);
+          setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
           return;
         }
       }
@@ -406,7 +405,7 @@ async function runAgentLoop() {
       broadcastLog(`Stuck detected! Page unchanged for ${STAGNATION_WINDOW} steps. Triggering recovery strategy.`, true);
     }
 
-    let debugImageDataUrl = '';
+    let capturedDebugFrame = false;
     if (!isOutreach) {
       const shouldCaptureForRepeatedProgress = repeatedActionDetected && isRepeatedProgressAction(snapshot, repeatedActionKey);
       const shouldCaptureForStagnantValidation = pageIsStagnant && Boolean(validationSummary);
@@ -436,10 +435,9 @@ async function runAgentLoop() {
               : 'stuck on Review/Next';
         const captureResult = await maybeCaptureAutoDebugSnapshot(snapshot, repeatedActionKey, validationSummary, captureReason);
         if (captureResult?.imageDataUrl) {
-          debugImageDataUrl = captureResult.imageDataUrl;
+          capturedDebugFrame = true;
           broadcastLog(`Auto debug screenshot captured (${captureResult.source || 'live'}).`);
-          broadcastLog(`DEBUG_IMAGE_READY: sending screenshot to ${settings.provider || 'llm'} (${settings.model || 'default model'}).`);
-          stuckHint += '\n\nDEBUG: A fresh screenshot of the current stuck modal is attached. Inspect the red validation error and choose the action that fixes that exact field before clicking Review/Next.';
+          broadcastLog('DEBUG_IMAGE_READY: screenshot captured for logs only (vision disabled).');
         } else {
           broadcastLog('Auto debug capture attempted but no frame was available.', true);
         }
@@ -451,8 +449,7 @@ async function runAgentLoop() {
 
     // 3. Ask LLM or auto-recover when stuck
     let decision = null;
-    const shouldAskLLMWithDebug = Boolean(debugImageDataUrl);
-    if ((repeatedActionDetected || pageIsStagnant) && !shouldAskLLMWithDebug) {
+    if (repeatedActionDetected || pageIsStagnant) {
       decision = chooseRecoveryDecision(snapshot, repeatedActionKey);
       if (decision) {
         broadcastLog(`Recovery Action: ${decision.action} → ${decision.elementId || 'N/A'} ${decision.value ? '(val: ' + decision.value + ')' : ''}`, true);
@@ -460,11 +457,10 @@ async function runAgentLoop() {
     }
 
     if (!decision) {
-      decision = await callLLM(snapshot, stuckHint + resumeAutoSelectedHint, debugImageDataUrl);
+      decision = await callLLM(snapshot, stuckHint + resumeAutoSelectedHint);
     }
-
-    if (debugImageDataUrl) {
-      broadcastLog(`DEBUG_IMAGE_USED: LLM decision was requested with screenshot context.`);
+    if (capturedDebugFrame) {
+      broadcastLog('DEBUG_IMAGE_USED: screenshot was captured for diagnostics, not sent to model.');
     }
 
     broadcastLog(`LLM: ${decision.reasoning}`);
@@ -549,43 +545,43 @@ async function runAgentLoop() {
           `Progress lock active: waiting for step transition before another "${decision.action}" on Next/Review. Blocked attempt ${progressNoAdvanceCount}.`,
           true,
         );
-        const fallbackResult = await runVisionFallback(snapshot, {
+        const fallbackResult = await runDeterministicFallback(snapshot, {
           reason: 'internal_state_mismatch:progress_lock',
           validationSummary,
           forceCapture: true,
           uploadCapture: internalMismatchRetryCount >= 3,
         });
         if (fallbackResult?.executedAction) {
-          broadcastLog(`Vision fallback executed action: ${fallbackResult.executedAction}.`);
+          broadcastLog(`Recovery executed action: ${fallbackResult.executedAction}.`);
           if (fallbackResult.executedAction !== 'RETRY') {
             internalMismatchRetryCount = 0;
           }
-          setTimeout(runAgentLoop, VISION_RECOVERY_LOOP_DELAY_MS);
+          setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
           return;
         }
         // Never permanently block progress based only on internal flags.
-        broadcastLog('Vision fallback unavailable. Allowing guarded progress click to avoid permanent block.', true);
+        broadcastLog('Recovery unavailable. Allowing guarded progress click to avoid permanent block.', true);
       }
 
       if (!isOutreach && !resumeSelectionCommitted && isProgressClickDecision(decision, snapshot)) {
         broadcastLog('Blocked progress button click because resume selection is not committed yet. Retrying resume step.', true);
         internalMismatchRetryCount += 1;
-        const fallbackResult = await runVisionFallback(snapshot, {
+        const fallbackResult = await runDeterministicFallback(snapshot, {
           reason: 'internal_state_mismatch:resume_not_committed',
           validationSummary,
           forceCapture: true,
           uploadCapture: internalMismatchRetryCount >= 3,
         });
         if (fallbackResult?.executedAction) {
-          broadcastLog(`Vision fallback executed action: ${fallbackResult.executedAction}.`);
+          broadcastLog(`Recovery executed action: ${fallbackResult.executedAction}.`);
           if (fallbackResult.executedAction !== 'RETRY') {
             internalMismatchRetryCount = 0;
           }
-          setTimeout(runAgentLoop, VISION_RECOVERY_LOOP_DELAY_MS);
+          setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
           return;
         }
         // Never permanently block progress based only on internal flags.
-        broadcastLog('Vision fallback unavailable. Allowing guarded progress click despite resume flag.', true);
+        broadcastLog('Recovery unavailable. Allowing guarded progress click despite resume flag.', true);
       }
 
       // Guard: in post outreach mode, skip any click on Easy Apply or job-apply elements
@@ -842,203 +838,92 @@ async function maybeCaptureAutoDebugSnapshot(
   }
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = VISION_FALLBACK_NETWORK_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new Error(`Vision request timed out after ${timeoutMs}ms`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-function parseVisionActionEnum(rawText = '') {
-  const allowed = ['CLICK_NEXT', 'SELECT_RESUME', 'CHECK_BOX', 'FILL_FIELD', 'RETRY'];
-  const upper = String(rawText || '').toUpperCase();
-  const found = allowed.find((token) => upper.includes(token));
-  return found || 'RETRY';
-}
-
-function buildVisionFallbackPrompt(snapshot, reason = '', validationSummary = '') {
-  const preview = String(snapshot?.rawText || '').replace(/\s+/g, ' ').slice(0, 1200);
-  return [
-    'You are a vision fallback controller for LinkedIn Easy Apply.',
-    'Analyze the screenshot and answer with ONLY one token from this list:',
-    'CLICK_NEXT',
-    'SELECT_RESUME',
-    'CHECK_BOX',
-    'FILL_FIELD',
-    'RETRY',
-    '',
-    'Questions to answer internally before choosing token:',
-    '1) Is a resume selected?',
-    '2) Is the Next button visible and clickable?',
-    '3) What should be done next?',
-    '',
-    `Reason: ${reason || 'unknown'}`,
-    `Validation summary: ${validationSummary || 'none'}`,
-    `URL: ${snapshot?.url || ''}`,
-    `Page preview: ${preview}`,
-    '',
-    'Decision policy:',
-    '- If no resume is selected or resume-required error is visible -> SELECT_RESUME',
-    '- If required consent checkbox is unchecked -> CHECK_BOX',
-    '- If required fields/validation errors remain -> FILL_FIELD',
-    '- If form looks valid and Next/Review/Submit is visible -> CLICK_NEXT',
-    '- Otherwise -> RETRY',
-  ].join('\n');
-}
-
-async function callGeminiVisionAction(prompt, debugImageDataUrl) {
-  const model = settings.model || 'gemini-3.1-flash-lite-preview';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
-  const parts = [{ text: prompt }];
-  const mimeMatch = String(debugImageDataUrl || '').match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
-  const mimeType = mimeMatch?.[1] || 'image/jpeg';
-  const base64Data = String(debugImageDataUrl || '').replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
-  if (base64Data) {
-    parts.push({
-      inlineData: {
-        mimeType,
-        data: base64Data,
-      },
-    });
-  }
-
-  const res = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts }],
-      generationConfig: {
-        temperature: 0,
-        maxOutputTokens: 16,
-      }
-    })
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini Vision API Error: ${err}`);
-  }
-
-  const data = await res.json();
-  const responseParts = data?.candidates?.[0]?.content?.parts || [];
-  const content = responseParts.find((part) => typeof part?.text === 'string')?.text || '';
-  return parseVisionActionEnum(content);
-}
-
-async function callAnthropicVisionAction(prompt, debugImageDataUrl) {
-  const baseUrl = settings.baseUrl || ANTHROPIC_DEFAULT_URL;
-  const model = settings.model || 'claude-3-5-sonnet-20241022';
-  const mimeMatch = String(debugImageDataUrl || '').match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
-  const mediaType = mimeMatch?.[1] || 'image/jpeg';
-  const base64Data = String(debugImageDataUrl || '').replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
-
-  const content = [{ type: 'text', text: prompt }];
-  if (base64Data) {
-    content.push({
-      type: 'image',
-      source: { type: 'base64', media_type: mediaType, data: base64Data },
-    });
-  }
-
-  const res = await fetchWithTimeout(`${baseUrl}/v1/messages`, {
-    method: 'POST',
-    headers: {
-      'x-api-key': settings.apiKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json'
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 32,
-      messages: [{ role: 'user', content }]
-    })
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Anthropic Vision API Error: ${err}`);
-  }
-
-  const data = await res.json();
-  const text = Array.isArray(data.content)
-    ? (data.content.find((part) => part?.type === 'text')?.text || '')
-    : '';
-  return parseVisionActionEnum(text);
-}
-
-async function callOpenAIVisionAction(prompt, debugImageDataUrl) {
-  const baseUrl = settings.baseUrl || OPENAI_DEFAULT_URL;
-  const model = settings.model || 'gpt-4o';
-
-  const res = await fetchWithTimeout(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${settings.apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'text', text: prompt },
-          { type: 'image_url', image_url: { url: debugImageDataUrl } },
-        ],
-      }],
-      temperature: 0,
-      max_tokens: 16,
-    })
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenAI Vision API Error: ${err}`);
-  }
-
-  const data = await res.json();
-  const text = data?.choices?.[0]?.message?.content || '';
-  return parseVisionActionEnum(text);
-}
-
-async function callVisionFallbackDecision(snapshot, debugImageDataUrl, reason = '', validationSummary = '') {
-  const prompt = buildVisionFallbackPrompt(snapshot, reason, validationSummary);
-  if (settings.provider === 'anthropic') {
-    return callAnthropicVisionAction(prompt, debugImageDataUrl);
-  }
-  if (settings.provider === 'gemini') {
-    return callGeminiVisionAction(prompt, debugImageDataUrl);
-  }
-  return callOpenAIVisionAction(prompt, debugImageDataUrl);
-}
-
-async function executeVisionRecoveryAction(visionAction) {
+function buildResumeRecoveryHints() {
   const goalText = (settings.userGoal || settings.searchQuery || '').toLowerCase();
   const hintMatch = goalText.match(/\b(\w+)\s+resume\b/i);
   const resumeKeyword = hintMatch?.[1]?.toLowerCase() || null;
   const titleTokens = (settings.searchQuery || '').toLowerCase().split(/\s+/).filter((t) => t.length > 2);
   const preferredResumeName = settings?.selectedResume?.file_name || '';
-
-  return sendMessageToAgentTab({
-    action: 'vision_recovery_action',
-    visionAction,
-    preferredResumeName,
-    resumeKeyword,
-    titleTokens,
-  }).catch(() => ({ success: false }));
+  return { preferredResumeName, resumeKeyword, titleTokens };
 }
 
-async function runVisionFallback(
+function pickDeterministicRecoveryAction(snapshot, validationSummary = '') {
+  const rawText = String(snapshot?.rawText || '').toLowerCase();
+  const summary = String(validationSummary || '').toLowerCase();
+  const combined = `${rawText}\n${summary}`;
+  const elements = snapshot?.elements || [];
+
+  if (/resume is required|include an updated resume|be sure to include an updated resume/.test(combined)) {
+    return 'SELECT_RESUME';
+  }
+
+  const hasUncheckedRequiredCheckbox = elements.some((element) => {
+    const isCheckbox = element?.type === 'checkbox' || element?.role === 'checkbox';
+    if (!isCheckbox) return false;
+    const checkboxContext = `${element?.label || ''} ${element?.text || ''} ${element?.errorText || ''}`.toLowerCase();
+    const likelyRequired = element?.required || /checkbox|agree|consent|confirm|terms/.test(checkboxContext);
+    return likelyRequired && element?.checked === false;
+  });
+  if (hasUncheckedRequiredCheckbox || /select checkbox to proceed|agree terms|terms and conditions|confirmed/.test(combined)) {
+    return 'CHECK_BOX';
+  }
+
+  const hasVisibleValidationIssue = elements.some((element) => {
+    if (isPrimaryProgressButton(element)) return false;
+    if (element?.invalid) return true;
+    if (element?.required && !hasMeaningfulFieldValue(element)) return true;
+    return false;
+  });
+  if (hasVisibleValidationIssue || /form_validation_errors|enter a decimal number|required|invalid|select an option/.test(combined)) {
+    return 'FILL_FIELD';
+  }
+
+  if (elements.some(isPrimaryProgressButton)) {
+    return 'CLICK_NEXT';
+  }
+
+  return 'RETRY';
+}
+
+async function executeDeterministicRecoveryAction(recoveryAction, snapshot) {
+  const action = String(recoveryAction || 'RETRY').toUpperCase();
+  const resumeHints = buildResumeRecoveryHints();
+
+  if (action === 'SELECT_RESUME') {
+    const result = await sendMessageToAgentTab({
+      action: 'auto_select_resume',
+      preferredResumeName: resumeHints.preferredResumeName,
+      resumeKeyword: resumeHints.resumeKeyword,
+      titleTokens: resumeHints.titleTokens,
+    }).catch(() => null);
+    return { success: Boolean(result?.selectionCommitted), executedAction: 'SELECT_RESUME' };
+  }
+
+  if (action === 'CLICK_NEXT') {
+    const progressButton = (snapshot?.elements || []).find(isPrimaryProgressButton);
+    if (progressButton?.id) {
+      await executeActionInActiveTab({
+        action: 'click',
+        elementId: progressButton.id,
+        reasoning: 'Deterministic recovery: clicking progress button.',
+      });
+      return { success: true, executedAction: 'CLICK_NEXT' };
+    }
+    return { success: false, executedAction: 'CLICK_NEXT' };
+  }
+
+  if (action === 'CHECK_BOX' || action === 'FILL_FIELD' || action === 'RETRY') {
+    const fixResult = await triggerValidationRecovery();
+    const success =
+      Boolean((fixResult?.fixed || 0) > 0) ||
+      Number(fixResult?.remaining || 0) === 0;
+    return { success, executedAction: action };
+  }
+
+  return { success: false, executedAction: 'RETRY' };
+}
+
+async function runDeterministicFallback(
   snapshot,
   { reason = '', validationSummary = '', forceCapture = false, uploadCapture = true } = {},
 ) {
@@ -1046,40 +931,22 @@ async function runVisionFallback(
     snapshot,
     '',
     validationSummary,
-    reason || 'vision fallback',
+    reason || 'deterministic fallback',
     { force: forceCapture, upload: uploadCapture },
   );
-
   const screenshotPath = captureResult?.capturePath || '';
-  const imageDataUrl = captureResult?.imageDataUrl || '';
-  broadcastLog(`VISION_FALLBACK screenshot_path=${screenshotPath || 'unavailable'}`);
-  if (!imageDataUrl) {
-    const retryExecution = await executeVisionRecoveryAction('RETRY');
-    broadcastLog(`VISION_FALLBACK vision_response=RETRY`);
-    broadcastLog(`VISION_FALLBACK executed_action=${retryExecution?.executedAction || 'RETRY'}`);
-    return {
-      screenshotPath,
-      visionResponse: 'RETRY',
-      executedAction: retryExecution?.executedAction || 'RETRY',
-      success: Boolean(retryExecution?.success),
-    };
-  }
+  broadcastLog(`RECOVERY_FALLBACK screenshot_path=${screenshotPath || 'unavailable'}`);
 
-  let visionResponse = 'RETRY';
-  try {
-    visionResponse = await callVisionFallbackDecision(snapshot, imageDataUrl, reason, validationSummary);
-  } catch (error) {
-    broadcastLog(`Vision fallback model error: ${error.message}`, true);
-  }
-  broadcastLog(`VISION_FALLBACK vision_response=${visionResponse}`);
+  const recoveryAction = pickDeterministicRecoveryAction(snapshot, validationSummary);
+  broadcastLog(`RECOVERY_FALLBACK decision=${recoveryAction}`);
 
-  const execution = await executeVisionRecoveryAction(visionResponse);
-  const executedAction = execution?.executedAction || visionResponse;
-  broadcastLog(`VISION_FALLBACK executed_action=${executedAction}`);
+  const execution = await executeDeterministicRecoveryAction(recoveryAction, snapshot);
+  const executedAction = execution?.executedAction || recoveryAction;
+  broadcastLog(`RECOVERY_FALLBACK executed_action=${executedAction}`);
 
   return {
     screenshotPath,
-    visionResponse,
+    recoveryAction,
     executedAction,
     success: Boolean(execution?.success),
   };
@@ -1247,7 +1114,7 @@ function chooseRecoveryDecision(snapshot, repeatedActionKey = '') {
 
 // ---- LLM Provider Abstraction ----
 
-async function callLLM(snapshot, stuckHint = '', debugImageDataUrl = '') {
+async function callLLM(snapshot, stuckHint = '') {
   // Extract an explicit resume preference from the user's goal (e.g. "with my product resume" → "product").
   const goalText = (settings.userGoal || settings.searchQuery || '').toLowerCase();
   const resumeHintMatch = goalText.match(/\b(\w+)\s+resume\b/i);
@@ -1387,42 +1254,21 @@ async function callLLM(snapshot, stuckHint = '', debugImageDataUrl = '') {
     '',
     'Respond with ONLY a JSON object:',
     '{"action": "...", "elementId": "...", "value": "...", "reasoning": "..."}',
-    debugImageDataUrl
-      ? '\nDEBUG IMAGE: A screenshot of the current stuck modal is attached. Use it to identify the exact invalid field and fix it.'
-      : '',
   ].join('\n');
 
   if (settings.provider === 'anthropic') {
-    return callAnthropic(prompt, debugImageDataUrl);
+    return callAnthropic(prompt);
   } else if (settings.provider === 'gemini') {
-    return callGemini(prompt, debugImageDataUrl);
+    return callGemini(prompt);
   } else {
-    return callOpenAICompat(prompt, debugImageDataUrl);
+    return callOpenAICompat(prompt);
   }
 }
 
-async function callGemini(prompt, debugImageDataUrl = '') {
+async function callGemini(prompt) {
   const model = settings.model || 'gemini-3.1-flash-lite-preview';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
   const parts = [{ text: prompt }];
-  let debugImageAttached = false;
-  let debugImageBytes = 0;
-
-  if (debugImageDataUrl) {
-    const mimeMatch = String(debugImageDataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
-    const mimeType = mimeMatch?.[1] || 'image/jpeg';
-    const base64Data = String(debugImageDataUrl).replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
-    if (base64Data) {
-      debugImageAttached = true;
-      debugImageBytes = Math.round((base64Data.length * 3) / 4);
-      parts.push({
-        inlineData: {
-          mimeType,
-          data: base64Data,
-        },
-      });
-    }
-  }
   
   const res = await fetch(url, {
     method: 'POST',
@@ -1434,10 +1280,6 @@ async function callGemini(prompt, debugImageDataUrl = '') {
       }
     })
   });
-
-  if (debugImageAttached) {
-    broadcastLog(`Gemini multimodal request sent with debug image (~${Math.max(1, Math.round(debugImageBytes / 1024))} KB).`);
-  }
 
   if (!res.ok) {
     const err = await res.text();
@@ -1484,26 +1326,10 @@ async function callGemini(prompt, debugImageDataUrl = '') {
   }
 }
 
-async function callAnthropic(prompt, debugImageDataUrl = '') {
+async function callAnthropic(prompt) {
   const baseUrl = settings.baseUrl || ANTHROPIC_DEFAULT_URL;
   const model = settings.model || 'claude-3-5-sonnet-20241022';
   const messageContent = [{ type: 'text', text: prompt }];
-
-  if (debugImageDataUrl) {
-    const mimeMatch = String(debugImageDataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
-    const mediaType = mimeMatch?.[1] || 'image/jpeg';
-    const base64Data = String(debugImageDataUrl).replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
-    if (base64Data) {
-      messageContent.push({
-        type: 'image',
-        source: {
-          type: 'base64',
-          media_type: mediaType,
-          data: base64Data,
-        },
-      });
-    }
-  }
 
   const res = await fetch(`${baseUrl}/v1/messages`, {
     method: 'POST',
@@ -1553,54 +1379,22 @@ async function callAnthropic(prompt, debugImageDataUrl = '') {
   return JSON.parse(jsonMatch[1]);
 }
 
-async function callOpenAICompat(prompt, debugImageDataUrl = '') {
+async function callOpenAICompat(prompt) {
   const baseUrl = settings.baseUrl || OPENAI_DEFAULT_URL;
   const model = settings.model || 'gpt-4o';
   const headers = {
     'Authorization': `Bearer ${settings.apiKey}`,
     'Content-Type': 'application/json'
   };
-
-  const buildPayload = (includeImage) => {
-    const content = includeImage && debugImageDataUrl
-      ? [
-          { type: 'text', text: prompt },
-          { type: 'image_url', image_url: { url: debugImageDataUrl } },
-        ]
-      : prompt;
-    return {
-      model,
-      messages: [{ role: 'user', content }],
-      response_format: { type: 'json_object' }
-    };
-  };
-
-  let includeImage = Boolean(debugImageDataUrl);
-  let res = await fetch(`${baseUrl}/v1/chat/completions`, {
+  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(buildPayload(includeImage))
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' }
+    })
   });
-
-  if (!res.ok && includeImage) {
-    const firstErr = await res.text();
-    const normalized = firstErr.toLowerCase();
-    if (
-      normalized.includes('image') ||
-      normalized.includes('vision') ||
-      normalized.includes('unsupported') ||
-      normalized.includes('invalid content')
-    ) {
-      includeImage = false;
-      res = await fetch(`${baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(buildPayload(false))
-      });
-    } else {
-      throw new Error(`OpenAI API Error: ${firstErr}`);
-    }
-  }
 
   if (!res.ok) {
     const err = await res.text();
