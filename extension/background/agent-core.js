@@ -918,10 +918,19 @@ function hasOpenEasyApplyModal(snapshot) {
 function findEasyApplyStartCandidate(snapshot) {
   const elements = snapshot?.elements || [];
   const buttonLike = elements.filter((el) => {
-    const text = String(el?.text || '').toLowerCase();
+    const text = String(el?.text || '').toLowerCase().trim();
     if (!text.includes('easy apply')) return false;
     if (text.includes('submit application') || text.includes('apply now')) return false;
     if (text.includes('applied') || text.includes('application submitted')) return false;
+
+    // HARD EXCLUDE: the search filter chip / toggle at the top of the page.
+    // It has short text ("easy apply" or "✓ easy apply") and sits in the top-left.
+    // The actual job-detail "Easy Apply" action button lives in the right pane (x > 550, y > 250).
+    const y = Number(el?.center?.y || 0);
+    const x = Number(el?.center?.x || 0);
+    const isShortLabel = text.replace(/[^a-z ]/g, '').trim() === 'easy apply';
+    if (isShortLabel && y > 0 && y < 300 && x < 550) return false;
+
     const tag = String(el?.tag || '').toLowerCase();
     const role = String(el?.role || '').toLowerCase();
     return tag === 'button' || role === 'button' || role === 'link' || tag === 'a';
@@ -930,7 +939,7 @@ function findEasyApplyStartCandidate(snapshot) {
   if (!buttonLike.length) return null;
 
   let best = null;
-  let bestScore = -1; // Ignore negative scores (like the top filter chip)
+  let bestScore = 0; // Require positive score to avoid stray matches
   for (const candidate of buttonLike) {
     const text = String(candidate?.text || '').toLowerCase().trim();
     const y = Number(candidate?.center?.y || 0);
@@ -939,8 +948,7 @@ function findEasyApplyStartCandidate(snapshot) {
     if (text === 'easy apply') score += 3;
     if (text.includes('easy apply')) score += 2;
     if (y >= 300) score += 4; // likely job detail pane action button
-    if (x >= 600) score += 3; // right pane bias on desktop
-    if (y > 0 && y < 180 && x < 500) score -= 8; // top search/filter bar chip penalty
+    if (x >= 550) score += 3; // right pane bias on desktop
 
     if (score > bestScore) {
       bestScore = score;
@@ -948,6 +956,17 @@ function findEasyApplyStartCandidate(snapshot) {
     }
   }
   return best;
+}
+
+function isCurrentJobAlreadyApplied(snapshot) {
+  const raw = String(snapshot?.rawText || '').toLowerCase();
+  // LinkedIn shows these phrases in the right-pane detail when you've already applied
+  return (
+    (raw.includes('applied') && raw.includes('see application')) ||
+    raw.includes('application submitted') ||
+    raw.includes('you applied') ||
+    raw.includes('application status')
+  );
 }
 
 function findEasyApplyListingCandidate(snapshot) {
@@ -967,27 +986,37 @@ function findEasyApplyListingCandidate(snapshot) {
 function chooseDeterministicJobsSearchDecision(snapshot) {
   if (!snapshot || hasOpenEasyApplyModal(snapshot)) return null;
 
-  const easyApplyButton = findEasyApplyStartCandidate(snapshot);
-  if (easyApplyButton?.id) {
-    return {
-      action: 'click',
-      elementId: easyApplyButton.id,
-      reasoning: 'Deterministic mode: clicking visible Easy Apply button directly.',
-    };
+  // If the current job detail shows "Applied", skip looking for the Easy Apply
+  // start button entirely. This prevents accidentally clicking the filter chip.
+  const alreadyApplied = isCurrentJobAlreadyApplied(snapshot);
+
+  if (!alreadyApplied) {
+    const easyApplyButton = findEasyApplyStartCandidate(snapshot);
+    if (easyApplyButton?.id) {
+      return {
+        action: 'click',
+        elementId: easyApplyButton.id,
+        reasoning: 'Deterministic mode: clicking visible Easy Apply button directly.',
+      };
+    }
   }
 
+  // Find the next unapplied Easy Apply listing in the sidebar
   const listingCandidate = findEasyApplyListingCandidate(snapshot);
   if (listingCandidate?.id) {
     return {
       action: 'click',
       elementId: listingCandidate.id,
-      reasoning: 'Deterministic mode: opening next Easy Apply job listing directly.',
+      reasoning: alreadyApplied
+        ? 'Deterministic mode: current job already applied. Clicking next Easy Apply listing.'
+        : 'Deterministic mode: opening next Easy Apply job listing directly.',
     };
   }
 
   const raw = String(snapshot.rawText || '').toLowerCase();
   const url = String(snapshot.url || '').toLowerCase();
   const looksLikeSingleAppliedDetail =
+    alreadyApplied ||
     raw.includes('application status') ||
     raw.includes('application submitted') ||
     raw.includes('you applied');
@@ -1004,7 +1033,9 @@ function chooseDeterministicJobsSearchDecision(snapshot) {
   if (isJobSearchSurface(snapshot)) {
     return {
       action: 'scroll',
-      reasoning: 'Deterministic mode: searching for more Easy Apply cards in results.',
+      reasoning: alreadyApplied
+        ? 'Deterministic mode: all visible jobs already applied. Scrolling for more Easy Apply listings.'
+        : 'Deterministic mode: searching for more Easy Apply cards in results.',
     };
   }
 
