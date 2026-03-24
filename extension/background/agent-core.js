@@ -15,6 +15,7 @@ let currentTaskChannel = 'extension_popup';
 let currentAgentSessionId = null;
 let targetApplyCount = 10;
 let appliedCount = 0;
+let maxRunSteps = 0;
 let preferredJobsSearchUrl = '';
 let lastSuccessSignature = '';
 let lastAutoDebugCaptureSignature = '';
@@ -33,7 +34,8 @@ let resumeEditAttempts = 0;
 let resumeStepSeenForCurrentApplication = false;
 let resumeStepProbeAttempted = false;
 let resumeStepBypassLoggedForCurrentApplication = false;
-const MAX_STEPS = 50;
+const MIN_MAX_STEPS = 400;
+const MAX_STEPS_PER_APPLICATION = 180;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
 const STAGNATION_WINDOW = 4;
 const AUTO_DEBUG_CAPTURE_COOLDOWN_MS = 60000;
@@ -126,6 +128,7 @@ export async function startAgent(config) {
   currentAgentSessionId = config.agentSessionId || null;
   targetApplyCount = Math.min(Math.max(Number(config.count) || 10, 1), 100);
   appliedCount = 0;
+  maxRunSteps = Math.max(MIN_MAX_STEPS, targetApplyCount * MAX_STEPS_PER_APPLICATION);
   preferredJobsSearchUrl = '';
   lastSuccessSignature = '';
   lastAutoDebugCaptureSignature = '';
@@ -151,6 +154,7 @@ export async function startAgent(config) {
   } else {
     broadcastLog(`No matching resume found — LinkedIn will use your profile default.`);
   }
+  broadcastLog(`Run step budget: ${maxRunSteps} steps (target: ${targetApplyCount} jobs).`);
   updateTaskStatus('running');
 
   const isOutreach = settings.mode === 'post_outreach';
@@ -204,6 +208,7 @@ export function stopAgent() {
   setAgentTabAutoDiscardable(true).catch(() => {});
   agentTabId = null;
   appliedCount = 0;
+  maxRunSteps = 0;
   preferredJobsSearchUrl = '';
   lastSuccessSignature = '';
   lastAutoDebugCaptureSignature = '';
@@ -244,8 +249,8 @@ async function runAgentLoop() {
   
   stepCount++;
   const isOutreach = settings.mode === 'post_outreach';
-  if (!isOutreach && stepCount > MAX_STEPS) {
-    broadcastLog('Max steps reached. Stopping.', true);
+  if (!isOutreach && maxRunSteps > 0 && stepCount > maxRunSteps) {
+    broadcastLog(`Step budget reached (${stepCount}/${maxRunSteps}). Stopping run safely.`, true);
     agentState = 'IDLE';
     await setAgentTabAutoDiscardable(true);
     agentTabId = null;
@@ -284,7 +289,7 @@ async function runAgentLoop() {
           lastSuccessSignature = signature;
           appliedCount += 1;
           const company = extractAppliedCompany(snapshot.rawText);
-          broadcastLog(`✅ Applied${company ? ` to ${company}` : ''}. Progress ${appliedCount}/${targetApplyCount}.`);
+          broadcastLog(`✅ Job ${appliedCount}/${targetApplyCount} done${company ? ` — ${company}` : ''}.`);
 
           if (appliedCount >= targetApplyCount) {
             agentState = 'DONE';
@@ -845,7 +850,8 @@ async function runAgentLoop() {
   } catch (error) {
     broadcastLog(`Error: ${error.message}`, true);
     // Don't die on recoverable errors, retry
-    if (stepCount < MAX_STEPS) {
+    const retryBudget = maxRunSteps > 0 ? maxRunSteps : MIN_MAX_STEPS;
+    if (stepCount < retryBudget) {
       broadcastLog('Retrying quickly...');
       setTimeout(runAgentLoop, ERROR_RETRY_DELAY_MS);
     } else {
