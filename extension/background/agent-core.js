@@ -29,6 +29,7 @@ let internalMismatchRetryCount = 0;
 let currentApplicationModalKey = '';
 let resumeVerifiedForCurrentApplication = false;
 let resumeBacktrackAttempts = 0;
+let resumeEditAttempts = 0;
 let resumeStepSeenForCurrentApplication = false;
 let resumeStepProbeAttempted = false;
 let resumeStepBypassLoggedForCurrentApplication = false;
@@ -139,6 +140,7 @@ export async function startAgent(config) {
   currentApplicationModalKey = '';
   resumeVerifiedForCurrentApplication = false;
   resumeBacktrackAttempts = 0;
+  resumeEditAttempts = 0;
   resumeStepSeenForCurrentApplication = false;
   resumeStepProbeAttempted = false;
   resumeStepBypassLoggedForCurrentApplication = false;
@@ -216,6 +218,7 @@ export function stopAgent() {
   currentApplicationModalKey = '';
   resumeVerifiedForCurrentApplication = false;
   resumeBacktrackAttempts = 0;
+  resumeEditAttempts = 0;
   resumeStepSeenForCurrentApplication = false;
   resumeStepProbeAttempted = false;
   resumeStepBypassLoggedForCurrentApplication = false;
@@ -305,6 +308,7 @@ async function runAgentLoop() {
         currentApplicationModalKey = modalKey;
         resumeVerifiedForCurrentApplication = false;
         resumeBacktrackAttempts = 0;
+        resumeEditAttempts = 0;
         resumeStepSeenForCurrentApplication = false;
         resumeStepProbeAttempted = false;
         resumeStepBypassLoggedForCurrentApplication = false;
@@ -313,6 +317,7 @@ async function runAgentLoop() {
         currentApplicationModalKey = '';
         resumeVerifiedForCurrentApplication = false;
         resumeBacktrackAttempts = 0;
+        resumeEditAttempts = 0;
         resumeStepSeenForCurrentApplication = false;
         resumeStepProbeAttempted = false;
         resumeStepBypassLoggedForCurrentApplication = false;
@@ -699,8 +704,24 @@ async function runAgentLoop() {
 
           if (verifiedBySelection || verifiedByText) {
             resumeVerifiedForCurrentApplication = true;
+            resumeEditAttempts = 0;
             broadcastLog(`Resume verification passed before "${targetText || 'progress'}".`);
           } else {
+            if (isLateProgressStep && resumeEditAttempts < 2) {
+              const editResult = await sendMessageToAgentTab({
+                action: 'open_resume_edit_from_review',
+              }).catch(() => null);
+              if (editResult?.opened) {
+                resumeEditAttempts += 1;
+                broadcastLog(
+                  `Preferred resume not verified before "${targetText || 'progress'}". Opened Resume → Edit (attempt ${resumeEditAttempts}).`,
+                  true,
+                );
+                setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
+                return;
+              }
+            }
+
             const backButton = (snapshot?.elements || []).find((el) => {
               const text = String(el?.text || '').toLowerCase();
               return text.includes('back') && !text.includes('feedback');

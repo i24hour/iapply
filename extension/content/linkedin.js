@@ -1964,6 +1964,63 @@ function getCardClickTarget(card) {
   );
 }
 
+function findResumeEditControl(modal = getEasyApplyModal()) {
+  if (!modal) return null;
+  const controls = Array.from(modal.querySelectorAll('button, a, [role="button"], [role="link"]')).filter((el) => {
+    if (!isElementVisible(el)) return false;
+    const text = normalizeText(el.innerText || el.textContent || el.getAttribute('aria-label') || '');
+    return text === 'edit' || text.endsWith(' edit') || text.includes(' edit ');
+  });
+
+  let best = null;
+  let bestScore = -Infinity;
+  for (const control of controls) {
+    let score = 0;
+    let cursor = control;
+    for (let i = 0; i < 6 && cursor; i++) {
+      const text = normalizeText(cursor.innerText || cursor.textContent || '');
+      if (text.includes('resume')) score += 6;
+      if (text.includes('be sure to include an updated resume')) score += 5;
+      if (text.includes('additional questions')) score -= 4;
+      if (text.includes('contact info')) score -= 3;
+      cursor = cursor.parentElement;
+    }
+    const y = control.getBoundingClientRect().top;
+    if (y > 0 && y < window.innerHeight * 0.8) score += 1;
+    if (score > bestScore) {
+      bestScore = score;
+      best = control;
+    }
+  }
+
+  return bestScore >= 2 ? best : null;
+}
+
+async function openResumeEditFromReview() {
+  const modal = getEasyApplyModal();
+  if (!modal) return { opened: false, reason: 'no easy apply modal' };
+
+  const control = findResumeEditControl(modal);
+  if (!control) return { opened: false, reason: 'resume edit control not found' };
+
+  await forceClickElement(control);
+  await sleep(260);
+
+  const updatedModal = getEasyApplyModal();
+  const updatedText = normalizeText(updatedModal?.innerText || '');
+  const movedToResumeStep =
+    getVisibleResumeCards(updatedModal).length > 0 ||
+    updatedText.includes('be sure to include an updated resume') ||
+    updatedText.includes('show more resumes') ||
+    updatedText.includes('a resume is required');
+
+  return {
+    opened: true,
+    movedToResumeStep,
+    reason: movedToResumeStep ? 'resume step visible after clicking edit' : 'clicked edit',
+  };
+}
+
 async function openNextEasyApplyJob() {
   const cardSelectors = [
     'li.jobs-search-results__list-item',
@@ -2083,6 +2140,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'open_next_easy_apply_job') {
     openNextEasyApplyJob().then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
+
+  if (message.action === 'open_resume_edit_from_review') {
+    openResumeEditFromReview().then((result) => {
       sendResponse(result);
     });
     return true;
