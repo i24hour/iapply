@@ -835,6 +835,127 @@ function getCheckboxErrorText(field, modal = getEasyApplyModal()) {
   return '';
 }
 
+function getRadioGroup(field, modal = getEasyApplyModal()) {
+  if (!field) return [];
+  const scope = modal || getEasyApplyModal() || document;
+  const name = (field.name || '').trim();
+  if (name) {
+    try {
+      const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(name) : name;
+      const groupByName = Array.from(scope.querySelectorAll(`input[type="radio"][name="${escaped}"]`));
+      if (groupByName.length) return groupByName;
+    } catch (_error) {
+      const groupByName = Array.from(scope.querySelectorAll(`input[type="radio"][name="${name}"]`));
+      if (groupByName.length) return groupByName;
+    }
+  }
+
+  const container =
+    field.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping, fieldset, [role="group"], .artdeco-form__element') ||
+    field.parentElement;
+  if (!container) return [field];
+  const group = Array.from(container.querySelectorAll('input[type="radio"]'));
+  return group.length ? group : [field];
+}
+
+function getRadioGroupErrorText(field, modal = getEasyApplyModal()) {
+  if (!field) return '';
+  const group = getRadioGroup(field, modal);
+  const anchor = group[0] || field;
+  const scopes = [
+    anchor.closest('.fb-dash-form-element'),
+    anchor.closest('.jobs-easy-apply-form-section__grouping'),
+    anchor.closest('[role="group"]'),
+    anchor.closest('fieldset'),
+    modal,
+  ].filter(Boolean);
+
+  for (const scope of scopes) {
+    const errorEl = scope.querySelector('.artdeco-inline-feedback__message, .artdeco-inline-feedback--error, .fb-dash-form-element__error-message, [role="alert"]');
+    const errorText = (errorEl?.textContent || '').trim();
+    if (errorText && /please make a selection|select (an )?option|required/i.test(errorText)) {
+      return errorText;
+    }
+
+    const text = normalizeText(scope.textContent || '');
+    if (text.includes('please make a selection')) {
+      return 'Please make a selection';
+    }
+  }
+
+  return '';
+}
+
+async function commitRadioSelection(radio) {
+  if (!radio) return false;
+  const targets = [];
+  const addTarget = (candidate) => {
+    if (!candidate || targets.includes(candidate)) return;
+    targets.push(candidate);
+  };
+
+  addTarget(radio);
+  if (radio.id) {
+    try {
+      const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(radio.id) : radio.id;
+      addTarget(document.querySelector(`label[for="${escapedId}"]`));
+    } catch (_error) {
+      // Ignore CSS selector failures.
+    }
+  }
+  addTarget(radio.closest('label'));
+  addTarget(radio.closest('[role="radio"], [role="button"], .fb-dash-form-element__option'));
+  addTarget(radio.parentElement);
+
+  for (const target of targets) {
+    if (!target || !isElementVisible(target)) continue;
+    await humanClick(target);
+    await sleep(80);
+
+    if (!radio.checked) {
+      radio.checked = true;
+    }
+    radio.dispatchEvent(new Event('input', { bubbles: true }));
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+    radio.dispatchEvent(new Event('click', { bubbles: true }));
+    radio.dispatchEvent(new Event('blur', { bubbles: true }));
+    await sleep(80);
+
+    if (radio.checked) return true;
+  }
+
+  return radio.checked;
+}
+
+async function ensureRadioGroupSelected(field, modal = getEasyApplyModal()) {
+  const group = getRadioGroup(field, modal).filter((radio) => isElementVisible(radio));
+  if (!group.length) return false;
+
+  const checked = group.find((radio) => radio.checked) || null;
+  const errorText = getRadioGroupErrorText(field, modal);
+  if (checked && !errorText) return true;
+
+  const preferredNo = findPreferredNoRadioOption(group);
+  const candidates = [];
+  const addCandidate = (candidate) => {
+    if (!candidate || candidates.includes(candidate)) return;
+    candidates.push(candidate);
+  };
+  addCandidate(checked);
+  addCandidate(preferredNo);
+  for (const radio of group) addCandidate(radio);
+
+  for (const radio of candidates) {
+    const committed = await commitRadioSelection(radio);
+    if (!committed) continue;
+    const groupErrorAfter = getRadioGroupErrorText(radio, modal);
+    if (!groupErrorAfter) return true;
+  }
+
+  const anyChecked = group.some((radio) => radio.checked);
+  return anyChecked && !getRadioGroupErrorText(field, modal);
+}
+
 function getCheckboxInput(field) {
   if (!field) return null;
   if ((field.getAttribute('type') || '').toLowerCase() === 'checkbox') return field;
@@ -1102,6 +1223,9 @@ async function setInputValue(element, value) {
 
 function fieldHasValidationError(field) {
   const errorText = getInlineErrorText(field);
+  const radioGroupErrorText = (field.getAttribute('type') || '').toLowerCase() === 'radio'
+    ? getRadioGroupErrorText(field, getEasyApplyModal())
+    : '';
   const required =
     field.required ||
     field.getAttribute('aria-required') === 'true' ||
@@ -1111,6 +1235,7 @@ function fieldHasValidationError(field) {
     field.getAttribute('aria-invalid') === 'true' ||
     field.getAttribute('data-test-form-element-error') === 'true' ||
     Boolean(errorText) ||
+    Boolean(radioGroupErrorText) ||
     (typeof field.checkValidity === 'function' && !field.checkValidity()) ||
     (required && isDropdownLikeElement(field) && isPlaceholderSelection(currentValue));
 
@@ -1205,6 +1330,7 @@ function listModalValidationIssues() {
   if (!modal) return [];
 
   const issues = [];
+  const processedRadioGroups = new Set();
   const fields = modal.querySelectorAll(
     'input, textarea, select, [role="combobox"], [role="checkbox"], button[aria-haspopup="listbox"], [role="button"][aria-haspopup="listbox"]'
   );
@@ -1215,6 +1341,18 @@ function listModalValidationIssues() {
     const label = getFieldLabel(field);
     const errorText = getInlineErrorText(field);
     const checkboxErrorText = isCheckboxLikeElement(field) ? getCheckboxErrorText(field, modal) : '';
+    const type = (field.getAttribute('type') || '').toLowerCase();
+    const radioGroup = type === 'radio' ? getRadioGroup(field, modal) : [];
+    const radioGroupName = type === 'radio'
+      ? ((field.name || '').trim() || getFieldLabel(field) || `radio-group-${issues.length}`)
+      : '';
+    const radioGroupErrorText = type === 'radio' ? getRadioGroupErrorText(field, modal) : '';
+    if (type === 'radio' && processedRadioGroups.has(radioGroupName)) {
+      continue;
+    }
+    if (type === 'radio') {
+      processedRadioGroups.add(radioGroupName);
+    }
     const value = getFieldCurrentValue(field);
     const required =
       field.required ||
@@ -1224,21 +1362,25 @@ function listModalValidationIssues() {
       field.getAttribute('aria-invalid') === 'true' ||
       Boolean(errorText) ||
       Boolean(checkboxErrorText) ||
+      Boolean(radioGroupErrorText) ||
       (typeof field.checkValidity === 'function' && !field.checkValidity()) ||
       (isDropdownLikeElement(field) && required && isPlaceholderSelection(value));
-    const type = (field.getAttribute('type') || '').toLowerCase();
 
     // Ignore hidden helper fields and search fields in dropdown widgets.
     if (type === 'hidden' || field.getAttribute('aria-hidden') === 'true') continue;
 
     const checkboxMissing = isCheckboxLikeElement(field) && !isCheckboxChecked(field);
-    const missingRequired = checkboxMissing || (required && !value && !isDropdownLikeElement(field));
+    const radioRequired = type === 'radio' && radioGroup.some((r) =>
+      r.required || r.getAttribute('aria-required') === 'true'
+    );
+    const radioMissing = type === 'radio' && radioRequired && !radioGroup.some((r) => r.checked);
+    const missingRequired = checkboxMissing || radioMissing || (required && !value && !isDropdownLikeElement(field));
 
     if (missingRequired || invalid) {
       issues.push({
         field,
         label,
-        errorText: errorText || checkboxErrorText,
+        errorText: errorText || checkboxErrorText || radioGroupErrorText,
         required,
         invalid,
         value,
@@ -1302,16 +1444,14 @@ async function autoFixModalValidationIssues() {
       }
 
       if (type === 'radio') {
-        const name = field.name;
-        const group = name ? Array.from(document.querySelectorAll(`input[type="radio"][name="${name}"]`)) : [field];
-        const selected = group.some(r => r.checked);
-        if (!selected && group.length) {
-          const preferred = findPreferredNoRadioOption(group) || group[0];
-          await humanClick(preferred);
+        const resolved = await ensureRadioGroupSelected(field, modal);
+        if (resolved) {
           fixed++;
-          details.push(`Selected radio option for ${label || name || 'required question'}`);
-          postAgentLog(`Selected radio option for ${label || name || 'required question'}.`);
+          details.push(`Selected radio option for ${label || field.name || 'required question'}`);
+          postAgentLog(`Resolved radio issue for ${label || field.name || 'required question'}.`);
           await sleep(120);
+        } else {
+          postAgentLog(`Could not resolve radio issue for ${label || field.name || 'required question'} yet.`, true);
         }
         continue;
       }
@@ -1982,6 +2122,14 @@ async function executeAgentAction(decision) {
         const checked = await ensureCheckboxChecked(el);
         if (checked) {
           postAgentLog(`Checked checkbox for ${getFieldLabel(el) || 'required consent'}.`);
+          return;
+        }
+      }
+
+      if (el.tagName === 'INPUT' && (el.getAttribute('type') || '').toLowerCase() === 'radio') {
+        const resolved = await ensureRadioGroupSelected(el, getEasyApplyModal());
+        if (resolved) {
+          postAgentLog(`Selected radio option for ${getFieldLabel(el) || 'required question'}.`);
           return;
         }
       }
