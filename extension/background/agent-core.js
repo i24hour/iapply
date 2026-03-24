@@ -930,7 +930,7 @@ function findEasyApplyStartCandidate(snapshot) {
   if (!buttonLike.length) return null;
 
   let best = null;
-  let bestScore = -Infinity;
+  let bestScore = -1; // Ignore negative scores (like the top filter chip)
   for (const candidate of buttonLike) {
     const text = String(candidate?.text || '').toLowerCase().trim();
     const y = Number(candidate?.center?.y || 0);
@@ -938,9 +938,10 @@ function findEasyApplyStartCandidate(snapshot) {
     let score = 0;
     if (text === 'easy apply') score += 3;
     if (text.includes('easy apply')) score += 2;
-    if (y >= 300) score += 4; // likely job detail pane action button, not top filter chip
-    if (x >= 650) score += 2; // right pane bias on desktop where primary Easy Apply lives
-    if (y > 0 && y < 260) score -= 8; // top search/filter bar chip
+    if (y >= 300) score += 4; // likely job detail pane action button
+    if (x >= 600) score += 3; // right pane bias on desktop
+    if (y > 0 && y < 180 && x < 500) score -= 8; // top search/filter bar chip penalty
+
     if (score > bestScore) {
       bestScore = score;
       best = candidate;
