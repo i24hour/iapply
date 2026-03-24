@@ -29,7 +29,9 @@ const MAX_STEPS = 50;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
 const STAGNATION_WINDOW = 4;
 const AUTO_DEBUG_CAPTURE_COOLDOWN_MS = 60000;
-const PROGRESS_TRANSITION_LOCK_TIMEOUT_MS = 12000;
+const PROGRESS_TRANSITION_LOCK_TIMEOUT_MS = 7000;
+const VISION_RECOVERY_LOOP_DELAY_MS = 500;
+const VISION_FALLBACK_NETWORK_TIMEOUT_MS = 6500;
 
 // Constants
 const API_URL = 'https://iapply-telegram-bot.onrender.com';
@@ -369,13 +371,13 @@ async function runAgentLoop() {
           reason: `retry_count_${internalMismatchRetryCount}`,
           validationSummary,
           forceCapture: true,
+          uploadCapture: true,
         });
+        // Reset after threshold fallback so we don't run the same expensive fallback every loop.
+        internalMismatchRetryCount = 0;
         if (autoVision?.executedAction) {
           broadcastLog(`Vision fallback executed action: ${autoVision.executedAction}.`);
-          if (autoVision.executedAction !== 'RETRY') {
-            internalMismatchRetryCount = 0;
-          }
-          setTimeout(runAgentLoop, 1200);
+          setTimeout(runAgentLoop, VISION_RECOVERY_LOOP_DELAY_MS);
           return;
         }
       }
@@ -551,13 +553,14 @@ async function runAgentLoop() {
           reason: 'internal_state_mismatch:progress_lock',
           validationSummary,
           forceCapture: true,
+          uploadCapture: internalMismatchRetryCount >= 3,
         });
         if (fallbackResult?.executedAction) {
           broadcastLog(`Vision fallback executed action: ${fallbackResult.executedAction}.`);
           if (fallbackResult.executedAction !== 'RETRY') {
             internalMismatchRetryCount = 0;
           }
-          setTimeout(runAgentLoop, 1200);
+          setTimeout(runAgentLoop, VISION_RECOVERY_LOOP_DELAY_MS);
           return;
         }
         // Never permanently block progress based only on internal flags.
@@ -571,13 +574,14 @@ async function runAgentLoop() {
           reason: 'internal_state_mismatch:resume_not_committed',
           validationSummary,
           forceCapture: true,
+          uploadCapture: internalMismatchRetryCount >= 3,
         });
         if (fallbackResult?.executedAction) {
           broadcastLog(`Vision fallback executed action: ${fallbackResult.executedAction}.`);
           if (fallbackResult.executedAction !== 'RETRY') {
             internalMismatchRetryCount = 0;
           }
-          setTimeout(runAgentLoop, 1200);
+          setTimeout(runAgentLoop, VISION_RECOVERY_LOOP_DELAY_MS);
           return;
         }
         // Never permanently block progress based only on internal flags.
@@ -803,7 +807,7 @@ async function maybeCaptureAutoDebugSnapshot(
   repeatedActionKey,
   validationSummary = '',
   reason = 'stuck loop',
-  { force = false } = {},
+  { force = false, upload = true } = {},
 ) {
   const signature = buildAutoDebugCaptureSignature(snapshot, repeatedActionKey, validationSummary);
   const now = Date.now();
@@ -822,6 +826,7 @@ async function maybeCaptureAutoDebugSnapshot(
       reason,
       validationSummary,
       url: snapshot?.url || '',
+      upload,
     });
 
     if (response?.success) {
@@ -834,6 +839,24 @@ async function maybeCaptureAutoDebugSnapshot(
   } catch (error) {
     broadcastLog(`Auto debug capture failed: ${error.message}`, true);
     return null;
+  }
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = VISION_FALLBACK_NETWORK_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`Vision request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -890,7 +913,7 @@ async function callGeminiVisionAction(prompt, debugImageDataUrl) {
     });
   }
 
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -928,7 +951,7 @@ async function callAnthropicVisionAction(prompt, debugImageDataUrl) {
     });
   }
 
-  const res = await fetch(`${baseUrl}/v1/messages`, {
+  const res = await fetchWithTimeout(`${baseUrl}/v1/messages`, {
     method: 'POST',
     headers: {
       'x-api-key': settings.apiKey,
@@ -958,7 +981,7 @@ async function callOpenAIVisionAction(prompt, debugImageDataUrl) {
   const baseUrl = settings.baseUrl || OPENAI_DEFAULT_URL;
   const model = settings.model || 'gpt-4o';
 
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+  const res = await fetchWithTimeout(`${baseUrl}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${settings.apiKey}`,
@@ -1015,13 +1038,16 @@ async function executeVisionRecoveryAction(visionAction) {
   }).catch(() => ({ success: false }));
 }
 
-async function runVisionFallback(snapshot, { reason = '', validationSummary = '', forceCapture = false } = {}) {
+async function runVisionFallback(
+  snapshot,
+  { reason = '', validationSummary = '', forceCapture = false, uploadCapture = true } = {},
+) {
   const captureResult = await maybeCaptureAutoDebugSnapshot(
     snapshot,
     '',
     validationSummary,
     reason || 'vision fallback',
-    { force: forceCapture },
+    { force: forceCapture, upload: uploadCapture },
   );
 
   const screenshotPath = captureResult?.capturePath || '';

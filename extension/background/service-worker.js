@@ -5,6 +5,8 @@ const TELEGRAM_POLL_INTERVAL = 5000;
 const MAX_DEBUG_LOGS = 250;
 const MAX_LOG_ENTRIES = 300;
 const RECORDING_INTERVAL_MS = 15000;
+const CAPTURE_STALE_LOCK_MS = 7000;
+const CAPTURE_FRAME_TIMEOUT_MS = 7500;
 
 let telegramPollTimer = null;
 let recordingTimer = null;
@@ -213,7 +215,7 @@ async function uploadFrameToEndpoint(dataUrl, endpointPath) {
 
 async function captureAgentFrame({ allowDebugger = true } = {}) {
   if (captureInFlightPromise) {
-    if (Date.now() - captureInFlightStartedAt > 12000) {
+    if (Date.now() - captureInFlightStartedAt > CAPTURE_STALE_LOCK_MS) {
       captureInFlightPromise = null;
       captureInFlightStartedAt = 0;
       emitAgentLog('Previous capture attempt became stale. Resetting capture lock.', true).catch(() => {});
@@ -237,14 +239,14 @@ async function captureAgentFrame({ allowDebugger = true } = {}) {
   })();
 
   try {
-    return await withTimeout(captureInFlightPromise, 13000, 'captureAgentFrame');
+    return await withTimeout(captureInFlightPromise, CAPTURE_FRAME_TIMEOUT_MS, 'captureAgentFrame');
   } finally {
     captureInFlightPromise = null;
     captureInFlightStartedAt = 0;
   }
 }
 
-async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '' } = {}) {
+async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '', uploadToBackend = true } = {}) {
   const liveFrame = await captureAgentFrame({ allowDebugger: true });
   let source = 'live';
   let dataUrl = liveFrame;
@@ -263,8 +265,11 @@ async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '' 
   lastCapturedAgentFrame = dataUrl;
   lastCapturedAgentFrameAt = Date.now();
 
-  const uploaded = await uploadFrameToEndpoint(dataUrl, '/agent/screenshot');
-  await uploadFrameToEndpoint(dataUrl, '/agent/capture');
+  let uploaded = false;
+  if (uploadToBackend) {
+    uploaded = await uploadFrameToEndpoint(dataUrl, '/agent/screenshot');
+    await uploadFrameToEndpoint(dataUrl, '/agent/capture');
+  }
 
   const details = [];
   const compactSummary = String(validationSummary || '')
@@ -276,7 +281,8 @@ async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '' 
   if (compactSummary) details.push(`errors=${compactSummary}`);
   const suffix = details.length ? ` | ${details.join(' | ')}` : '';
 
-  emitAgentLog(`Auto debug screenshot ${uploaded ? 'sent' : 'captured'} (${source})${suffix}.`, !uploaded).catch(() => {});
+  const mode = uploadToBackend ? (uploaded ? 'sent' : 'captured') : 'captured-local';
+  emitAgentLog(`Auto debug screenshot ${mode} (${source})${suffix}.`, uploadToBackend && !uploaded).catch(() => {});
 
   return {
     success: true,
@@ -515,6 +521,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const result = await pushDebugCaptureToTelegram({
         reason: String(message.reason || ''),
         validationSummary: String(message.validationSummary || ''),
+        uploadToBackend: message.upload !== false,
       });
       sendResponse(result);
     })().catch((error) => {
