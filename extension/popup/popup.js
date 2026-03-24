@@ -1,5 +1,5 @@
-const API_URL = 'http://localhost:3001';
-const WEB_URL = 'http://localhost:3000';
+const API_URL = 'https://iapply-telegram-bot.onrender.com';
+const WEB_URL = 'https://iapply.onrender.com';
 
 // Elements
 const elAuthStatus = document.getElementById('authStatus');
