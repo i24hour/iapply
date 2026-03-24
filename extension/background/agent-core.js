@@ -658,9 +658,9 @@ async function runAgentLoop() {
         const needsResumeGate = Boolean(preferredResumeName) || hasIntentTokens;
         const targetElement = (snapshot?.elements || []).find((el) => el.id === decision.elementId);
         const targetText = String(targetElement?.text || '').toLowerCase();
-        const isLateProgressStep = targetText.includes('review') || targetText.includes('submit');
+        const isFinalSubmitStep = targetText.includes('submit');
 
-        if (needsResumeGate && isLateProgressStep && !resumeVerifiedForCurrentApplication) {
+        if (needsResumeGate && isFinalSubmitStep && !resumeVerifiedForCurrentApplication) {
           if (!resumeStepSeenForCurrentApplication && !resumeStepProbeAttempted) {
             const backButtonForProbe = (snapshot?.elements || []).find((el) => {
               const text = String(el?.text || '').toLowerCase();
@@ -693,7 +693,7 @@ async function runAgentLoop() {
             titleTokens: resumeHints.titleTokens,
             expectedTokens: resumeHints.intentTokens,
             disallowedTokens: resumeHints.disallowedTokens,
-            forceFix: isLateProgressStep,
+            forceFix: true,
           }).catch(() => null);
 
           const verifiedBySelection = Boolean(verifyResult?.matched);
@@ -712,16 +712,6 @@ async function runAgentLoop() {
                 `Preferred resume mismatch before "${targetText || 'progress'}". Applied Resume Edit correction${observedResumeName ? ` (current: ${observedResumeName})` : ''}. Re-checking...`,
                 true,
               );
-              setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
-              return;
-            }
-
-            if (isLateProgressStep) {
-              broadcastLog(
-                `Blocking "${targetText || 'progress'}" because preferred resume is not verified${observedResumeName ? ` (current: ${observedResumeName})` : ''}.`,
-                true,
-              );
-              internalMismatchRetryCount += 1;
               setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
               return;
             }
@@ -1495,6 +1485,7 @@ function isDropdownSnapshotElement(element) {
 
 function expectsNumericSnapshotValue(element) {
   const combined = `${element?.label || ''} ${element?.errorText || ''} ${element?.text || ''}`.toLowerCase();
+  const joinInDaysPattern = combined.includes('join') && combined.includes('day');
   return (
     element?.type === 'number' ||
     combined.includes('decimal') ||
@@ -1507,7 +1498,9 @@ function expectsNumericSnapshotValue(element) {
     combined.includes('ctc') ||
     combined.includes('salary') ||
     combined.includes('notice period') ||
-    combined.includes('experience')
+    combined.includes('experience') ||
+    joinInDaysPattern ||
+    combined.includes('joining')
   );
 }
 
@@ -1546,6 +1539,12 @@ function pickRecoveryValue(element) {
   }
   if (combined.includes('notice period')) {
     return '1';
+  }
+  if (combined.includes('join') && combined.includes('day')) {
+    return '30';
+  }
+  if (combined.includes('joining')) {
+    return '30';
   }
   if (combined.includes('experience') || combined.includes('year')) {
     return numeric ? '3' : '3 years';

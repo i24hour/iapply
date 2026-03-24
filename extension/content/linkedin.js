@@ -1009,6 +1009,7 @@ function isNumericInput(el) {
 
 function expectsNumericValue(labelText, el, errorText = '') {
   const combined = `${labelText || ''} ${errorText || ''}`.toLowerCase();
+  const joinInDaysPattern = combined.includes('join') && combined.includes('day');
   return (
     isNumericInput(el) ||
     combined.includes('decimal') ||
@@ -1022,7 +1023,9 @@ function expectsNumericValue(labelText, el, errorText = '') {
     combined.includes('ctc') ||
     combined.includes('salary') ||
     combined.includes('notice period') ||
-    combined.includes('experience')
+    combined.includes('experience') ||
+    joinInDaysPattern ||
+    combined.includes('joining')
   );
 }
 
@@ -1070,6 +1073,12 @@ function pickFallbackValue(labelText, el, errorText = '') {
   }
   if (label.includes('notice period')) {
     return numeric ? '1' : '1 month';
+  }
+  if (label.includes('join') && label.includes('day')) {
+    return '30';
+  }
+  if (label.includes('joining')) {
+    return '30';
   }
   if (label.includes('year') || label.includes('experience')) {
     return numeric ? '3' : '3 years';
