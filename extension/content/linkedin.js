@@ -1341,7 +1341,11 @@ function isPrimaryApplyActionButton(el) {
 
 function getVisibleResumeCards(modal = getEasyApplyModal()) {
   if (!modal) return [];
-  return Array.from(modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment')).filter((card) => isElementVisible(card));
+  return Array.from(
+    modal.querySelectorAll(
+      '.jobs-document-upload-redesign-card, .ui-attachment, [data-test-text-selectable-option__container], [data-test-document-upload-card]'
+    )
+  ).filter((card) => isElementVisible(card));
 }
 
 function getResumeCardInput(card) {
@@ -1552,13 +1556,13 @@ async function revealAllResumeOptions(modal) {
     const showMoreBtn = findShowMoreResumesButton(modal);
     if (!showMoreBtn) break;
 
-    const beforeCount = modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment').length;
+    const beforeCount = getVisibleResumeCards(modal).length;
     const label = (showMoreBtn.innerText || showMoreBtn.textContent || 'Show more resumes').trim();
     postAgentLog(`Clicking "${label}" to reveal hidden resumes...`);
     await forceClickElement(showMoreBtn);
     await sleep(300);
 
-    const afterCount = modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment').length;
+    const afterCount = getVisibleResumeCards(modal).length;
     if (afterCount > beforeCount || !findShowMoreResumesButton(modal)) {
       expanded = true;
     }
@@ -1575,12 +1579,16 @@ async function autoSelectBestResume(preferredResumeName, resumeKeyword, titleTok
   await revealAllResumeOptions(modal);
 
   // Step 2: Gather all visible resume cards
-  const resumeCards = Array.from(
-    modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment')
-  ).filter(c => isElementVisible(c));
+  const resumeCards = getVisibleResumeCards(modal);
 
   if (!resumeCards.length) {
-    return { changed: false, reason: 'no resume cards found', selectionCommitted: false };
+    const resumeSectionPresent = /be sure to include an updated resume|upload resume|a resume is required|show more resumes|resume is required/i.test(modal.innerText || '');
+    const committedWithoutCards = resumeSectionPresent && !hasResumeRequirementError(modal);
+    return {
+      changed: false,
+      reason: resumeSectionPresent ? 'resume section present but no selectable cards found' : 'no resume cards found',
+      selectionCommitted: committedWithoutCards,
+    };
   }
 
   // Step 3: Build keyword list
@@ -1741,11 +1749,12 @@ function buildDOMSnapshot() {
 
   // Detect resume selection step in the modal
   const modal = getEasyApplyModal();
-  const resumeCards = modal
-    ? Array.from(modal.querySelectorAll('.jobs-document-upload-redesign-card, .ui-attachment')).filter(c => isElementVisible(c))
-    : [];
+  const resumeCards = getVisibleResumeCards(modal);
+  const resumeSectionPresent = modal
+    ? /be sure to include an updated resume|upload resume|a resume is required|show more resumes|resume is required/i.test(modal.innerText || '')
+    : false;
   let resumeStepSummary = '';
-  if (resumeCards.length > 0) {
+  if (resumeCards.length > 0 || resumeSectionPresent) {
     const resumeDetails = resumeCards.map(card => {
       const nameEl = card.querySelector('h3, .ui-attachment__title, .jobs-document-upload-redesign-card__file-name, [data-test-text-selectable-option__text]');
       const name = nameEl?.textContent?.trim() || 'Unknown';
@@ -1762,7 +1771,8 @@ function buildDOMSnapshot() {
       ? `\nWARNING: MORE RESUMES ARE HIDDEN! You MUST click "${showMoreBtn.innerText.trim()}" BEFORE selecting a resume.`
       : '';
 
-    resumeStepSummary = `RESUME_STEP_DETECTED:\nThis is a RESUME SELECTION step. Visible resumes:\n${resumeDetails}${hiddenNote}\nFollow Rule 20 NOW.\n\n`;
+    const noCardsNote = resumeCards.length === 0 ? '\n- Resume section detected, but no selectable resume cards were parsed in the current DOM.' : '';
+    resumeStepSummary = `RESUME_STEP_DETECTED:\nThis is a RESUME SELECTION step. Visible resumes:\n${resumeDetails || '- none parsed'}${noCardsNote}${hiddenNote}\nFollow Rule 20 NOW.\n\n`;
   }
 
   // Also grab raw text of the body to detect CAPTCHAs or page context broadly

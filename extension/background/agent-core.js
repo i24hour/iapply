@@ -29,6 +29,9 @@ let internalMismatchRetryCount = 0;
 let currentApplicationModalKey = '';
 let resumeVerifiedForCurrentApplication = false;
 let resumeBacktrackAttempts = 0;
+let resumeStepSeenForCurrentApplication = false;
+let resumeStepProbeAttempted = false;
+let resumeStepBypassLoggedForCurrentApplication = false;
 const MAX_STEPS = 50;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
 const STAGNATION_WINDOW = 4;
@@ -136,6 +139,9 @@ export async function startAgent(config) {
   currentApplicationModalKey = '';
   resumeVerifiedForCurrentApplication = false;
   resumeBacktrackAttempts = 0;
+  resumeStepSeenForCurrentApplication = false;
+  resumeStepProbeAttempted = false;
+  resumeStepBypassLoggedForCurrentApplication = false;
 
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
   if (settings.selectedResume) {
@@ -210,6 +216,9 @@ export function stopAgent() {
   currentApplicationModalKey = '';
   resumeVerifiedForCurrentApplication = false;
   resumeBacktrackAttempts = 0;
+  resumeStepSeenForCurrentApplication = false;
+  resumeStepProbeAttempted = false;
+  resumeStepBypassLoggedForCurrentApplication = false;
   broadcastLog('Stopped by user.');
   updateTaskStatus('stopped');
   completeAutomationSession();
@@ -263,9 +272,10 @@ async function runAgentLoop() {
       return;
     }
 
+    let applicationSuccessSignal = false;
     if (!isOutreach) {
-      const successSignal = hasApplicationSuccessSignal(snapshot.rawText);
-      if (successSignal) {
+      applicationSuccessSignal = hasApplicationSuccessSignal(snapshot.rawText);
+      if (applicationSuccessSignal) {
         const signature = buildApplicationSuccessSignature(snapshot);
         if (signature && signature !== lastSuccessSignature) {
           lastSuccessSignature = signature;
@@ -295,11 +305,17 @@ async function runAgentLoop() {
         currentApplicationModalKey = modalKey;
         resumeVerifiedForCurrentApplication = false;
         resumeBacktrackAttempts = 0;
+        resumeStepSeenForCurrentApplication = false;
+        resumeStepProbeAttempted = false;
+        resumeStepBypassLoggedForCurrentApplication = false;
         broadcastLog(`Detected new application modal: ${modalKey}. Resetting resume verification gate.`);
       } else if (!modalKey) {
         currentApplicationModalKey = '';
         resumeVerifiedForCurrentApplication = false;
         resumeBacktrackAttempts = 0;
+        resumeStepSeenForCurrentApplication = false;
+        resumeStepProbeAttempted = false;
+        resumeStepBypassLoggedForCurrentApplication = false;
       }
 
       const preferredResumeName = settings?.selectedResume?.file_name || '';
@@ -319,6 +335,7 @@ async function runAgentLoop() {
     let resumeAutoSelectedHint = '';
     let resumeSelectionCommitted = true;
     if (snapshot.rawText?.includes('RESUME_STEP_DETECTED')) {
+      resumeStepSeenForCurrentApplication = true;
       broadcastLog('Resume selection step detected — running auto-select...');
       const goalText = (settings.userGoal || settings.searchQuery || '').toLowerCase();
       const hintMatch = goalText.match(/\b(\w+)\s+resume\b/i);
@@ -503,10 +520,25 @@ async function runAgentLoop() {
 
     // 3. Ask LLM or auto-recover when stuck
     let decision = null;
+    if (!isOutreach && applicationSuccessSignal) {
+      const dismissButton = findSuccessModalDismissButton(snapshot);
+      if (dismissButton?.id) {
+        decision = {
+          action: 'click',
+          elementId: dismissButton.id,
+          reasoning: 'Success modal detected. Clicking Done/Close before continuing to next job.',
+        };
+        broadcastLog('Success modal is open. Prioritizing Done/Close click.');
+      }
+    }
+
     if (repeatedActionDetected || pageIsStagnant) {
-      decision = chooseRecoveryDecision(snapshot, repeatedActionKey);
-      if (decision) {
-        broadcastLog(`Recovery Action: ${decision.action} → ${decision.elementId || 'N/A'} ${decision.value ? '(val: ' + decision.value + ')' : ''}`, true);
+      const recoveryDecision = chooseRecoveryDecision(snapshot, repeatedActionKey);
+      if (!decision) {
+        decision = recoveryDecision;
+      }
+      if (recoveryDecision) {
+        broadcastLog(`Recovery Action: ${recoveryDecision.action} → ${recoveryDecision.elementId || 'N/A'} ${recoveryDecision.value ? '(val: ' + recoveryDecision.value + ')' : ''}`, true);
       }
     }
 
@@ -625,6 +657,27 @@ async function runAgentLoop() {
         const isLateProgressStep = targetText.includes('review') || targetText.includes('submit');
 
         if (preferredResumeName && isLateProgressStep && !resumeVerifiedForCurrentApplication) {
+          if (!resumeStepSeenForCurrentApplication && !resumeStepProbeAttempted) {
+            const backButtonForProbe = (snapshot?.elements || []).find((el) => {
+              const text = String(el?.text || '').toLowerCase();
+              return text.includes('back') && !text.includes('feedback');
+            });
+            resumeStepProbeAttempted = true;
+            if (backButtonForProbe?.id) {
+              broadcastLog(
+                `Resume step was not seen before "${targetText || 'progress'}". Backtracking once to verify resume stage.`,
+                true,
+              );
+              await executeActionInActiveTab({
+                action: 'click',
+                elementId: backButtonForProbe.id,
+                reasoning: 'Resume verification gate: one-time backtrack to probe resume step.',
+              });
+              setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
+              return;
+            }
+          }
+
           broadcastLog(
             `Resume not verified yet before "${targetText || 'progress'}". Running enforced resume verification.`,
             true,
@@ -662,6 +715,13 @@ async function runAgentLoop() {
               });
               setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
               return;
+            }
+            if (!resumeStepSeenForCurrentApplication && !resumeStepBypassLoggedForCurrentApplication) {
+              resumeStepBypassLoggedForCurrentApplication = true;
+              broadcastLog(
+                'Resume stage was not presented by LinkedIn in this application flow; continuing with current profile/resume state.',
+                true,
+              );
             }
             broadcastLog('Resume verification still unresolved; proceeding to avoid deadlock.', true);
           }
@@ -923,10 +983,46 @@ function hasOpenEasyApplyModal(snapshot) {
   return (
     raw.includes('application powered by linkedin') ||
     raw.includes('application powered by smart_recruiters') ||
+    raw.includes('application sent') ||
+    raw.includes('your application was sent') ||
+    raw.includes('your application has been submitted') ||
     raw.includes('submitting this application won') ||
     raw.includes('form_validation_errors') ||
     raw.includes('resume_step_detected')
   );
+}
+
+function findSuccessModalDismissButton(snapshot) {
+  const raw = String(snapshot?.rawText || '').toLowerCase();
+  const isSuccessModal =
+    raw.includes('application sent') ||
+    raw.includes('your application was sent') ||
+    raw.includes('your application has been submitted') ||
+    raw.includes('application submitted');
+  if (!isSuccessModal) return null;
+
+  const elements = snapshot?.elements || [];
+  const buttons = elements.filter((el) => {
+    const tag = String(el?.tag || '').toLowerCase();
+    const role = String(el?.role || '').toLowerCase();
+    return tag === 'button' || role === 'button' || role === 'link' || tag === 'a';
+  });
+
+  let doneButton = null;
+  let closeButton = null;
+  for (const btn of buttons) {
+    const text = String(btn?.text || '').toLowerCase().trim();
+    if (!text) continue;
+    if (text === 'done' || text.includes(' done')) {
+      doneButton = btn;
+      break;
+    }
+    if (text.includes('dismiss') || text === 'close' || text.includes('close')) {
+      closeButton = btn;
+    }
+  }
+
+  return doneButton || closeButton || null;
 }
 
 function findEasyApplyStartCandidate(snapshot) {
