@@ -323,15 +323,6 @@ async function runAgentLoop() {
         resumeStepBypassLoggedForCurrentApplication = false;
       }
 
-      const preferredResumeName = settings?.selectedResume?.file_name || '';
-      const normalizedPreferred = normalizeResumeToken(preferredResumeName);
-      if (
-        preferredResumeName &&
-        normalizedPreferred &&
-        normalizeResumeToken(snapshot.rawText).includes(normalizedPreferred)
-      ) {
-        resumeVerifiedForCurrentApplication = true;
-      }
     }
 
     broadcastLog(`Page: ${snapshot.url} | ${snapshot.elements.length} elements`);
@@ -689,37 +680,41 @@ async function runAgentLoop() {
           );
           const resumeHints = buildResumeRecoveryHints();
           const verifyResult = await sendMessageToAgentTab({
-            action: 'auto_select_resume',
+            action: 'verify_preferred_resume',
             preferredResumeName: resumeHints.preferredResumeName,
             resumeKeyword: resumeHints.resumeKeyword,
             titleTokens: resumeHints.titleTokens,
+            forceFix: isLateProgressStep,
           }).catch(() => null);
 
-          const verifiedBySelection =
-            Boolean(verifyResult?.selectionCommitted) &&
-            resumeNameMatchesPreferred(verifyResult?.selectedName || '', preferredResumeName);
-          const verifiedByText =
-            Boolean(normalizeResumeToken(preferredResumeName)) &&
-            normalizeResumeToken(snapshot.rawText).includes(normalizeResumeToken(preferredResumeName));
+          const verifiedBySelection = Boolean(verifyResult?.matched);
+          const observedResumeName = String(verifyResult?.selectedName || '').trim();
 
-          if (verifiedBySelection || verifiedByText) {
+          if (verifiedBySelection) {
             resumeVerifiedForCurrentApplication = true;
             resumeEditAttempts = 0;
-            broadcastLog(`Resume verification passed before "${targetText || 'progress'}".`);
+            broadcastLog(
+              `Resume verification passed before "${targetText || 'progress'}"${observedResumeName ? ` (selected: ${observedResumeName})` : ''}.`
+            );
           } else {
-            if (isLateProgressStep && resumeEditAttempts < 2) {
-              const editResult = await sendMessageToAgentTab({
-                action: 'open_resume_edit_from_review',
-              }).catch(() => null);
-              if (editResult?.opened) {
-                resumeEditAttempts += 1;
-                broadcastLog(
-                  `Preferred resume not verified before "${targetText || 'progress'}". Opened Resume → Edit (attempt ${resumeEditAttempts}).`,
-                  true,
-                );
-                setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
-                return;
-              }
+            if (verifyResult?.corrected || verifyResult?.editOpened) {
+              resumeEditAttempts += 1;
+              broadcastLog(
+                `Preferred resume mismatch before "${targetText || 'progress'}". Applied Resume Edit correction${observedResumeName ? ` (current: ${observedResumeName})` : ''}. Re-checking...`,
+                true,
+              );
+              setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
+              return;
+            }
+
+            if (isLateProgressStep) {
+              broadcastLog(
+                `Blocking "${targetText || 'progress'}" because preferred resume is not verified${observedResumeName ? ` (current: ${observedResumeName})` : ''}.`,
+                true,
+              );
+              internalMismatchRetryCount += 1;
+              setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
+              return;
             }
 
             const backButton = (snapshot?.elements || []).find((el) => {
@@ -737,14 +732,9 @@ async function runAgentLoop() {
               setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
               return;
             }
-            if (!resumeStepSeenForCurrentApplication && !resumeStepBypassLoggedForCurrentApplication) {
-              resumeStepBypassLoggedForCurrentApplication = true;
-              broadcastLog(
-                'Resume stage was not presented by LinkedIn in this application flow; continuing with current profile/resume state.',
-                true,
-              );
-            }
-            broadcastLog('Resume verification still unresolved; proceeding to avoid deadlock.', true);
+            broadcastLog('Resume verification unresolved and no back/edit control found yet. Retrying...', true);
+            setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
+            return;
           }
         }
       }
@@ -1048,9 +1038,19 @@ function findSuccessModalDismissButton(snapshot) {
 
 function findEasyApplyStartCandidate(snapshot) {
   const elements = snapshot?.elements || [];
+  const isApplyStartText = (text = '') => {
+    const normalized = String(text || '').toLowerCase().trim();
+    return (
+      normalized.includes('easy apply') ||
+      normalized.includes('continue applying') ||
+      normalized.includes('continue application') ||
+      normalized === 'continue'
+    );
+  };
+
   const buttonLike = elements.filter((el) => {
     const text = String(el?.text || '').toLowerCase().trim();
-    if (!text.includes('easy apply')) return false;
+    if (!isApplyStartText(text)) return false;
     if (text.includes('submit application') || text.includes('apply now')) return false;
     if (text.includes('applied') || text.includes('application submitted')) return false;
 
@@ -1061,6 +1061,7 @@ function findEasyApplyStartCandidate(snapshot) {
     const x = Number(el?.center?.x || 0);
     const isShortLabel = text.replace(/[^a-z ]/g, '').trim() === 'easy apply';
     if (isShortLabel && y > 0 && y < 300 && x < 550) return false;
+    if (text === 'continue' && x < 550) return false;
 
     const tag = String(el?.tag || '').toLowerCase();
     const role = String(el?.role || '').toLowerCase();
@@ -1078,6 +1079,8 @@ function findEasyApplyStartCandidate(snapshot) {
     let score = 0;
     if (text === 'easy apply') score += 3;
     if (text.includes('easy apply')) score += 2;
+    if (text.includes('continue applying') || text.includes('continue application')) score += 4;
+    if (text === 'continue') score += 2;
     if (y >= 300) score += 4; // likely job detail pane action button
     if (x >= 550) score += 3; // right pane bias on desktop
 
@@ -1104,9 +1107,11 @@ function findEasyApplyListingCandidate(snapshot) {
   const elements = snapshot?.elements || [];
   const candidates = elements.filter((el) => {
     const text = String(el?.text || '').toLowerCase();
-    if (!text.includes('easy apply')) return false;
+    const hasEasyApply = text.includes('easy apply');
+    const hasContinue = text.includes('continue applying') || text.includes('continue application');
+    if (!hasEasyApply && !hasContinue) return false;
     if (text.includes('applied') || text.includes('application submitted')) return false;
-    if (text === 'easy apply') return false; // filter chip or detail button handled separately
+    if (text === 'easy apply' || text === 'continue') return false; // filter chip handled separately
     const tag = String(el?.tag || '').toLowerCase();
     const role = String(el?.role || '').toLowerCase();
     return tag === 'a' || role === 'link' || role === 'button' || tag === 'button';

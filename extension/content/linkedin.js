@@ -1521,6 +1521,42 @@ function normalizeResumeName(value) {
     .trim();
 }
 
+function resumeNameLikelyMatchesPreferred(candidateName, preferredName) {
+  const candidate = normalizeResumeName(candidateName);
+  const preferred = normalizeResumeName(preferredName);
+  if (!candidate || !preferred) return false;
+  return candidate === preferred || candidate.includes(preferred) || preferred.includes(candidate);
+}
+
+function extractResumeCardName(card) {
+  if (!card) return '';
+  const nameEl = card.querySelector(
+    'h3, .ui-attachment__title, .jobs-document-upload-redesign-card__file-name, [data-test-text-selectable-option__text]'
+  );
+  return (nameEl?.textContent || '').trim();
+}
+
+function getDisplayedResumeName(modal = getEasyApplyModal()) {
+  if (!modal) return '';
+  const cards = getVisibleResumeCards(modal);
+  if (cards.length) {
+    const committed =
+      cards.find((card) => isResumeCardCommitted(card, modal)) ||
+      cards.find((card) => Boolean(card.querySelector('input[type="radio"]:checked, input[type="checkbox"]:checked'))) ||
+      (cards.length === 1 ? cards[0] : null);
+    const target = committed || cards[0];
+    const name = extractResumeCardName(target);
+    if (name) return name;
+  }
+
+  const modalLines = (modal.innerText || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const fileLine = modalLines.find((line) => /\.(pdf|doc|docx)\b/i.test(line));
+  return fileLine || '';
+}
+
 function scoreResumeNameMatch(candidateName, preferredName) {
   const candidate = normalizeResumeName(candidateName);
   const preferred = normalizeResumeName(preferredName);
@@ -1918,6 +1954,16 @@ function isCardApplied(card) {
 
 function cardHasEasyApply(card) {
   if (!card) return false;
+  const isApplyFlowText = (text = '') => {
+    const normalized = normalizeText(text);
+    return (
+      normalized.includes('easy apply') ||
+      normalized.includes('continue applying') ||
+      normalized.includes('continue application') ||
+      normalized.includes('in progress')
+    );
+  };
+
   const badgeSelectors = [
     '.job-card-container__apply-method',
     '.job-card-list__apply-method',
@@ -1930,8 +1976,8 @@ function cardHasEasyApply(card) {
     .flatMap((selector) => Array.from(card.querySelectorAll(selector)))
     .map((el) => normalizeText(el.textContent || el.innerText || ''))
     .join(' ');
-  if (badgeText.includes('easy apply')) return true;
-  return normalizeText(card.innerText || '').includes('easy apply');
+  if (isApplyFlowText(badgeText)) return true;
+  return isApplyFlowText(card.innerText || '');
 }
 
 function getCardTitle(card) {
@@ -2018,6 +2064,47 @@ async function openResumeEditFromReview() {
     opened: true,
     movedToResumeStep,
     reason: movedToResumeStep ? 'resume step visible after clicking edit' : 'clicked edit',
+  };
+}
+
+async function verifyPreferredResumeInModal(preferredResumeName, resumeKeyword, titleTokens, forceFix = false) {
+  const modal = getEasyApplyModal();
+  if (!modal) {
+    return { matched: false, selectedName: '', corrected: false, reason: 'no easy apply modal' };
+  }
+
+  const selectedBefore = getDisplayedResumeName(modal);
+  const preferredProvided = Boolean(String(preferredResumeName || '').trim());
+  if (!preferredProvided) {
+    return { matched: true, selectedName: selectedBefore, corrected: false, reason: 'no preferred resume configured' };
+  }
+
+  if (resumeNameLikelyMatchesPreferred(selectedBefore, preferredResumeName)) {
+    return { matched: true, selectedName: selectedBefore, corrected: false, reason: 'already matching' };
+  }
+
+  if (!forceFix) {
+    return { matched: false, selectedName: selectedBefore, corrected: false, reason: 'mismatch' };
+  }
+
+  let corrected = false;
+  const editResult = await openResumeEditFromReview();
+  corrected = Boolean(editResult?.opened);
+
+  const autoResult = await autoSelectBestResume(preferredResumeName, resumeKeyword, titleTokens);
+  if (autoResult?.changed) corrected = true;
+
+  const selectedAfter = getDisplayedResumeName(getEasyApplyModal());
+  const matchedAfter =
+    resumeNameLikelyMatchesPreferred(selectedAfter, preferredResumeName) ||
+    resumeNameLikelyMatchesPreferred(autoResult?.selectedName || '', preferredResumeName);
+
+  return {
+    matched: matchedAfter,
+    selectedName: selectedAfter || autoResult?.selectedName || selectedBefore,
+    corrected,
+    reason: matchedAfter ? 'matched_after_fix' : (autoResult?.reason || 'mismatch_after_fix'),
+    editOpened: Boolean(editResult?.opened),
   };
 }
 
@@ -2147,6 +2234,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'open_resume_edit_from_review') {
     openResumeEditFromReview().then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
+
+  if (message.action === 'verify_preferred_resume') {
+    verifyPreferredResumeInModal(
+      message.preferredResumeName,
+      message.resumeKeyword,
+      message.titleTokens,
+      message.forceFix === true
+    ).then((result) => {
       sendResponse(result);
     });
     return true;
