@@ -787,7 +787,8 @@ async function pollFrontendCommands() {
     });
     const roles = Array.isArray(cmd.payload?.roles) ? cmd.payload.roles.filter(Boolean) : [];
     const locations = Array.isArray(cmd.payload?.locations) ? cmd.payload.locations.filter(Boolean) : [];
-    const searchQuery = [roles[0] || 'Software Engineer', locations[0] || ''].filter(Boolean).join(' ');
+    const payloadSearchQuery = String(cmd.payload?.searchQuery || '').trim();
+    const searchQuery = payloadSearchQuery || [roles[0] || 'Software Engineer', locations[0] || ''].filter(Boolean).join(' ');
 
     const config = {
       provider: cmd.payload?.provider || settings.llm_provider || 'gemini',

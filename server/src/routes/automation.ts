@@ -12,11 +12,29 @@ const startAutomationSchema = z.object({
   source: z.enum(['frontend', 'extension', 'telegram']).optional().default('frontend'),
   channel: z.string().min(1).max(100).optional().default('dashboard_chat'),
   commandText: z.string().min(1).max(500).optional(),
+  searchQuery: z.string().min(1).max(300).optional(),
   provider: z.string().min(1).max(100).optional(),
   model: z.string().min(1).max(200).optional(),
   apiKey: z.string().min(1).max(500).optional(),
   baseUrl: z.string().url().optional(),
 });
+
+function extractSearchQueryFromCommand(commandText = ''): string {
+  const raw = String(commandText || '').trim();
+  if (!raw) return '';
+
+  const directMatch = raw.match(
+    /(?:apply|start|begin|run)\s*(?:to|for)?\s*(.+?)(?:\s+\d+\s*jobs?)?(?:\s+based on.*)?$/i
+  );
+  if (!directMatch?.[1]) return '';
+
+  const cleaned = directMatch[1]
+    .replace(/\b(easy\s*apply|jobs?|based on|using|from|with|my|profile|resume|preferences?)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned || /^\d+$/.test(cleaned)) return '';
+  return cleaned;
+}
 
 // Get automation status
 router.get('/status', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -53,7 +71,7 @@ router.get('/status', authenticate, async (req: AuthRequest, res: Response, next
 // Start automation
 router.post('/start', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { count, source, channel, commandText, provider, model, apiKey, baseUrl } = startAutomationSchema.parse(req.body);
+    const { count, source, channel, commandText, searchQuery, provider, model, apiKey, baseUrl } = startAutomationSchema.parse(req.body);
 
     const { data: activeCommand } = await supabase
       .from('agent_sessions')
@@ -73,8 +91,19 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
     const configuredModel = model || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite-preview';
     const configuredApiKey = apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
 
+    const explicitSearchQuery = (searchQuery || extractSearchQueryFromCommand(commandText || '')).trim();
+    const fallbackSearchQuery = [
+      (preferences?.roles || [])[0] || '',
+      (preferences?.locations || [])[0] || '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    const resolvedSearchQuery = explicitSearchQuery || fallbackSearchQuery || 'Software Engineer';
+
     const searchQuery = JSON.stringify({
       count,
+      searchQuery: resolvedSearchQuery,
       roles: preferences?.roles || [],
       locations: preferences?.locations || [],
       provider: configuredProvider,
@@ -105,6 +134,7 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
         agentSessionId: command?.id || null,
         metadata: {
           count,
+          searchQuery: resolvedSearchQuery,
           roles: preferences?.roles || [],
           locations: preferences?.locations || [],
         },

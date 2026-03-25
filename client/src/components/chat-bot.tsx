@@ -37,6 +37,30 @@ interface ParsedCommand {
   count?: number;
   category: CommandCategory;
   applyMode?: ApplyMode;
+  searchQuery?: string;
+}
+
+function extractSearchQueryFromApplyText(text: string): string {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  // Examples handled:
+  // "apply for product manager"
+  // "apply to software engineer jobs"
+  // "start backend developer"
+  const directMatch = raw.match(
+    /(?:apply|start|begin|run)\s*(?:to|for)?\s*(.+?)(?:\s+\d+\s*jobs?)?(?:\s+based on.*)?$/i
+  );
+  if (!directMatch?.[1]) return '';
+
+  const cleaned = directMatch[1]
+    .replace(/\b(easy\s*apply|jobs?|based on|using|from|with|my|profile|resume|preferences?)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Guard: if user only said "apply 5 jobs", don't treat "5" as query.
+  if (!cleaned || /^\d+$/.test(cleaned)) return '';
+  return cleaned;
 }
 
 function parseCommand(text: string): ParsedCommand | null {
@@ -59,11 +83,13 @@ function parseCommand(text: string): ParsedCommand | null {
     /(?:apply|start|begin|run)\s*(?:to\s*|for\s*)?(\d+)?\s*(?:jobs?)?(?:\s*(?:based on|using|from|with)\s*(?:my\s*)?(?:profile|resume|preferences?))?/
   );
   if (applyMatch) {
+    const extractedSearchQuery = extractSearchQueryFromApplyText(text);
     return {
       action: 'start',
       applyMode: 'apply',
       count: applyMatch[1] ? parseInt(applyMatch[1]) : 10,
       category: 'extension',
+      searchQuery: extractedSearchQuery || undefined,
     };
   }
 
@@ -298,6 +324,7 @@ export function ChatBot() {
             source: 'frontend',
             channel: 'dashboard_chat',
             commandText: rawCommandText,
+            searchQuery: command.searchQuery,
             provider: 'gemini',
           });
           setAutomationStatus({ ...automationStatus, isRunning: true, currentAction: 'scrape_jobs' });

@@ -89,6 +89,7 @@ export const automationApi = {
       source?: 'frontend' | 'extension' | 'telegram';
       channel?: string;
       commandText?: string;
+      searchQuery?: string;
       provider?: string;
       model?: string;
       apiKey?: string;
