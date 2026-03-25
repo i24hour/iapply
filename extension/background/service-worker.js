@@ -792,7 +792,7 @@ async function pollFrontendCommands() {
     const config = {
       provider: cmd.payload?.provider || settings.llm_provider || 'gemini',
       apiKey: cmd.payload?.apiKey || settings.llm_api_key || '',
-      model: cmd.payload?.model || settings.llm_model || 'gemini-1.5-flash',
+      model: cmd.payload?.model || settings.llm_model || 'gemini-3.1-flash-lite-preview',
       baseUrl: cmd.payload?.baseUrl || settings.llm_base_url || '',
       searchQuery,
       count: Number(cmd.payload?.count) > 0 ? Number(cmd.payload.count) : 10,

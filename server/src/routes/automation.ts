@@ -70,7 +70,7 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
     const { data: preferences } = await supabase.from('job_preferences').select('*').eq('user_id', req.userId).single();
 
     const configuredProvider = provider || 'gemini';
-    const configuredModel = model || process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+    const configuredModel = model || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite-preview';
     const configuredApiKey = apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
 
     const searchQuery = JSON.stringify({
