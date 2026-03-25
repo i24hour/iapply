@@ -101,7 +101,7 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
       .trim();
     const resolvedSearchQuery = explicitSearchQuery || fallbackSearchQuery || 'Software Engineer';
 
-    const searchQuery = JSON.stringify({
+    const searchQueryPayload = JSON.stringify({
       count,
       searchQuery: resolvedSearchQuery,
       roles: preferences?.roles || [],
@@ -114,7 +114,7 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
 
     const { data: command, error } = await supabase.from('agent_sessions').insert({
       user_id: req.userId,
-      search_query: searchQuery,
+      search_query: searchQueryPayload,
       applications_count: count,
       status: 'idle',
     }).select().single();
