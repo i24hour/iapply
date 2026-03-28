@@ -21,7 +21,7 @@ router.get('/commands', authenticate, async (req: AuthRequest, res: Response, ne
       .select('*')
       .eq('user_id', req.userId)
       .eq('status', 'idle')
-      .order('started_at', { ascending: true })
+      .order('started_at', { ascending: false })
       .limit(1)
       .single();
 

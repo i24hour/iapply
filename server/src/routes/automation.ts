@@ -104,6 +104,7 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
     const searchQueryPayload = JSON.stringify({
       count,
       searchQuery: resolvedSearchQuery,
+      commandText: commandText || '',
       roles: preferences?.roles || [],
       locations: preferences?.locations || [],
       provider: configuredProvider,

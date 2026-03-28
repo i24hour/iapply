@@ -428,6 +428,24 @@ function buildResumeIntentProfile(searchQuery = '') {
   };
 }
 
+function extractSearchQueryFromCommandText(commandText = '') {
+  const raw = String(commandText || '').trim();
+  if (!raw) return '';
+
+  const match = raw.match(
+    /(?:apply|start|begin|run)\s*(?:to|for)?\s*(.+?)(?:\s+\d+\s*jobs?)?(?:\s+based on.*)?$/i
+  );
+  if (!match?.[1]) return '';
+
+  const cleaned = match[1]
+    .replace(/\b(easy\s*apply|jobs?|based on|using|from|with|my|profile|resume|preferences?)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned || /^\d+$/.test(cleaned)) return '';
+  return cleaned;
+}
+
 function countTokenHits(text, tokens = []) {
   const hay = normalizeResumeToken(text);
   if (!hay) return 0;
@@ -787,8 +805,10 @@ async function pollFrontendCommands() {
     });
     const roles = Array.isArray(cmd.payload?.roles) ? cmd.payload.roles.filter(Boolean) : [];
     const locations = Array.isArray(cmd.payload?.locations) ? cmd.payload.locations.filter(Boolean) : [];
+    const payloadCommandText = String(cmd.payload?.commandText || '').trim();
     const payloadSearchQuery = String(cmd.payload?.searchQuery || '').trim();
-    const searchQuery = payloadSearchQuery || [roles[0] || 'Software Engineer', locations[0] || ''].filter(Boolean).join(' ');
+    const parsedSearchQuery = extractSearchQueryFromCommandText(payloadCommandText);
+    const searchQuery = payloadSearchQuery || parsedSearchQuery || [roles[0] || 'Software Engineer', locations[0] || ''].filter(Boolean).join(' ');
 
     const config = {
       provider: cmd.payload?.provider || settings.llm_provider || 'gemini',
