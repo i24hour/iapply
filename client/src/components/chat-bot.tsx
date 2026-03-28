@@ -38,6 +38,7 @@ interface ParsedCommand {
   category: CommandCategory;
   applyMode?: ApplyMode;
   searchQuery?: string;
+  targetText?: string;
 }
 
 function extractSearchQueryFromApplyText(text: string): string {
@@ -61,6 +62,34 @@ function extractSearchQueryFromApplyText(text: string): string {
   // Guard: if user only said "apply 5 jobs", don't treat "5" as query.
   if (!cleaned || /^\d+$/.test(cleaned)) return '';
   return cleaned;
+}
+
+function normalizeManualClickTarget(rawTarget: string): string {
+  return String(rawTarget || '')
+    .replace(/^[`"'“”\s]+|[`"'“”\s]+$/g, '')
+    .replace(/\b(?:please|pls|plz|now|abhi|just)\b/gi, ' ')
+    .replace(/\b(?:ko\s+)?click\s*(?:karo|kar do|krdo|kr do)?$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractManualClickTarget(text: string): string {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  const direct = raw.match(/\b(?:click|tap|press)\s+(?:on\s+)?(.+)/i);
+  if (direct?.[1]) {
+    const normalized = normalizeManualClickTarget(direct[1]);
+    if (normalized) return normalized;
+  }
+
+  const hindiStyle = raw.match(/^(.+?)\s+(?:ko\s+)?click\s*(?:karo|kar do|krdo|kr do)?$/i);
+  if (hindiStyle?.[1]) {
+    const normalized = normalizeManualClickTarget(hindiStyle[1]);
+    if (normalized) return normalized;
+  }
+
+  return '';
 }
 
 function parseCommand(text: string): ParsedCommand | null {
@@ -118,6 +147,11 @@ function parseCommand(text: string): ParsedCommand | null {
 
   if (/\b(screenshot|snap|capture)\b/.test(lower)) {
     return { action: 'screenshot', category: 'extension' };
+  }
+
+  const clickTarget = extractManualClickTarget(text);
+  if (clickTarget) {
+    return { action: 'manual_click', category: 'extension', targetText: clickTarget };
   }
 
   if (/\b(logs?|recording|screen\s*record|live\s*feed|stream)\b/.test(lower)) {
@@ -363,19 +397,13 @@ export function ChatBot() {
         }
 
         case 'stop': {
-          if (!automationStatus.isRunning) {
-            addMessage({
-              role: 'bot',
-              content: "Nothing is running right now. Say **\"apply 10 jobs\"** to start!",
-            });
-            break;
-          }
-
           await automationApi.stop();
           setAutomationStatus({ isRunning: false, jobsScraped: 0, jobsApplied: 0, jobsFailed: 0 });
           addMessage({
             role: 'bot',
-            content: '🛑 Automation **stopped** and reset. Ready for your next command!',
+            content: automationStatus.isRunning
+              ? '🛑 Automation **stopped** and reset. Ready for your next command!'
+              : '🛑 Stop command sent. Agar extension background me run kar raha tha, ab halt ho jayega.',
           });
           break;
         }
@@ -424,6 +452,30 @@ export function ChatBot() {
             addMessage({
               role: 'bot',
               content: '❌ Could not request screenshot right now. Ensure extension is logged in and running.',
+            });
+          }
+          break;
+        }
+
+        case 'manual_click': {
+          const targetText = String(command.targetText || '').trim();
+          if (!targetText) {
+            addMessage({
+              role: 'bot',
+              content: '❌ Tell me what to click, for example: **"click Not now"**.',
+            });
+            break;
+          }
+          try {
+            await extensionApi.manualClick(targetText);
+            addMessage({
+              role: 'bot',
+              content: `🖱️ Click request queued for **"${targetText}"**. Extension ab LinkedIn tab me ise click karne ki koshish karega.`,
+            });
+          } catch {
+            addMessage({
+              role: 'bot',
+              content: '❌ Could not send click command right now. Ensure extension is active and authenticated.',
             });
           }
           break;
@@ -552,7 +604,7 @@ export function ChatBot() {
           addMessage({
             role: 'bot',
             content:
-              '🤖 **Here\'s what I can do:**\n\n**Job Automation** _(sent to extension)_\n• **"Easy apply 5 jobs"** — Start Easy Apply mode (no iApply resume required)\n• **"Apply 5 jobs"** — Start apply mode (requires uploaded resume)\n• **"Apply 10 jobs based on my profile"** — Same, explicit\n• **"Pause"** — Pause current automation\n• **"Stop"** — Stop and reset\n• **"Resume"** — Resume paused automation\n\n**Live Monitoring**\n• **"logs"** or **"live feed"** — Confirm live stream mode\n• **"screenshot"** — Request an instant capture from extension\n• **"start recording"** — Force recording ON\n• **"stop recording"** — Force recording OFF\n• Extension logs and latest captures are auto-posted here\n\n**Info & Status**\n• **"Status"** — Check automation progress\n• **"Show applications"** — See recent applications\n• **"Stats"** — View your numbers\n\n**Profile & Settings**\n• **"Show my profile"** — View profile info\n• **"Show resume"** — View resume details\n• **"Preferences"** — View job preferences',
+              '🤖 **Here\'s what I can do:**\n\n**Job Automation** _(sent to extension)_\n• **"Easy apply 5 jobs"** — Start Easy Apply mode (no iApply resume required)\n• **"Apply 5 jobs"** — Start apply mode (requires uploaded resume)\n• **"Apply 10 jobs based on my profile"** — Same, explicit\n• **"Pause"** — Pause current automation\n• **"Stop"** — Stop and reset\n• **"Resume"** — Resume paused automation\n\n**Manual Control**\n• **"click not now"**\n• **"not now ko click krdo"**\n• **"tap continue"**\n\n**Live Monitoring**\n• **"logs"** or **"live feed"** — Confirm live stream mode\n• **"screenshot"** — Request an instant capture from extension\n• **"start recording"** — Force recording ON\n• **"stop recording"** — Force recording OFF\n• Extension logs and latest captures are auto-posted here\n\n**Info & Status**\n• **"Status"** — Check automation progress\n• **"Show applications"** — See recent applications\n• **"Stats"** — View your numbers\n\n**Profile & Settings**\n• **"Show my profile"** — View profile info\n• **"Show resume"** — View resume details\n• **"Preferences"** — View job preferences',
           });
           break;
         }
@@ -584,7 +636,7 @@ export function ChatBot() {
       addMessage({
         role: 'bot',
         content:
-          "I'm not sure what you mean. Here are some things you can try:\n\n• **\"Easy apply 5 jobs\"**\n• **\"Apply 5 jobs based on my profile\"**\n• **\"Show status\"**\n• **\"Show my applications\"**\n• **\"Show my profile\"**\n• **\"Preferences\"**\n• **\"Help\"** for full command list",
+          "I'm not sure what you mean. Here are some things you can try:\n\n• **\"Easy apply 5 jobs\"**\n• **\"Apply 5 jobs based on my profile\"**\n• **\"click not now\"**\n• **\"Show status\"**\n• **\"Show my applications\"**\n• **\"Show my profile\"**\n• **\"Preferences\"**\n• **\"Help\"** for full command list",
       });
     }
 

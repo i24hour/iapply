@@ -8,6 +8,7 @@ let bot: TelegramBot | null = null;
 
 type TelegramIntentName =
   | 'apply'
+  | 'manual_click'
   | 'stop'
   | 'screenshot'
   | 'status'
@@ -21,6 +22,7 @@ type TelegramIntentName =
 type TelegramIntent = {
   intent: TelegramIntentName;
   query?: string;
+  targetText?: string;
   userGoal?: string;
   reply?: string;
   count?: number;
@@ -106,6 +108,34 @@ function extractApplyQuery(text: string) {
   return '';
 }
 
+function normalizeClickTarget(raw: string) {
+  return String(raw || '')
+    .replace(/^[`"'“”\s]+|[`"'“”\s]+$/g, '')
+    .replace(/\b(?:please|pls|plz|now|abhi|just)\b/gi, ' ')
+    .replace(/\b(?:ko\s+)?click\s*(?:karo|kar do|krdo|kr do)?$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractClickTarget(text: string) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  const direct = raw.match(/\b(?:click|tap|press)\s+(?:on\s+)?(.+)/i);
+  if (direct?.[1]) {
+    const target = normalizeClickTarget(direct[1]);
+    if (target) return target;
+  }
+
+  const hindiStyle = raw.match(/^(.+?)\s+(?:ko\s+)?click\s*(?:karo|kar do|krdo|kr do)?$/i);
+  if (hindiStyle?.[1]) {
+    const target = normalizeClickTarget(hindiStyle[1]);
+    if (target) return target;
+  }
+
+  return '';
+}
+
 function detectDirectIntent(text: string): TelegramIntent | null {
   const normalized = String(text || '').trim();
   const lower = normalized.toLowerCase();
@@ -119,9 +149,17 @@ function detectDirectIntent(text: string): TelegramIntent | null {
     return { intent: 'screenshot' };
   }
 
+  const clickTarget = extractClickTarget(normalized);
+  if (clickTarget) {
+    return { intent: 'manual_click', targetText: clickTarget };
+  }
+
   if (
-    /\b(stop|pause|cancel|halt|abort|end)\b/i.test(normalized) &&
-    /\b(apply|agent|automation|search|run|job|process|task|it|this)\b/i.test(normalized)
+    /^\s*(stop|pause|cancel|halt|abort|end)\s*$/i.test(normalized) ||
+    (
+      /\b(stop|pause|cancel|halt|abort|end)\b/i.test(normalized) &&
+      /\b(apply|agent|automation|search|run|job|process|task|it|this)\b/i.test(normalized)
+    )
   ) {
     return { intent: 'stop' };
   }
@@ -184,6 +222,7 @@ async function classifyTelegramIntent(params: {
 
 Available intents:
 - apply: user wants you to start applying/searching for jobs
+- manual_click: user wants to click a specific button/control in LinkedIn tab (example "click not now")
 - screenshot: user wants a live screenshot/photo of the browser
 - stop: user wants the running agent stopped
 - status: user wants current status/progress
@@ -199,11 +238,12 @@ Recent logs:
 ${logs || 'No recent logs.'}
 
 Return strict JSON only with this shape:
-{"intent":"apply|screenshot|stop|status|usage|logs|help|stats|whoami|chat","query":"string","userGoal":"string","reply":"string"}
+{"intent":"apply|manual_click|screenshot|stop|status|usage|logs|help|stats|whoami|chat","query":"string","targetText":"string","userGoal":"string","reply":"string"}
 
 Rules:
 - If the user asks to apply, extract a clean job-role-only string in "query" (e.g. "product manager"), stripping filler words and resume preferences.
 - If the user asks to apply, put the COMPLETE original instruction verbatim in "userGoal" — do NOT strip resume preferences or any other details from it.
+- If the user asks to click a UI item, set intent=manual_click and fill "targetText" with only the UI label to click (for example "Not now", "Review", "Continue").
 - If intent is not "chat", keep "reply" empty.
 - If intent is "chat", give a short helpful plain-text reply in "reply".
 - Never wrap JSON in markdown fences.
@@ -255,6 +295,9 @@ ${params.message}`;
       parsed.query = normalizeApplyQuery(parsed.query || '');
       parsed.userGoal = String(parsed.userGoal || params.message).trim();
       parsed.count = extractRequestedApplyCount(params.message, 10);
+    }
+    if (parsed.intent === 'manual_click') {
+      parsed.targetText = normalizeClickTarget(parsed.targetText || parsed.query || '');
     }
     return parsed;
   } catch (error) {
@@ -339,6 +382,7 @@ export function startTelegramBot(token: string) {
       chatId,
       `🤖 *iApply Bot Commands:*\n\n` +
         `▸ /apply <query> — Start job search & auto-apply\n` +
+        `▸ /click <label> — Click a visible button/control in LinkedIn tab\n` +
         `▸ /stop — Stop the running agent\n` +
         `▸ /screenshot — Capture Chrome browser window\n` +
         `▸ /status — Check if agent is running\n` +
@@ -471,6 +515,28 @@ export function startTelegramBot(token: string) {
     bot!.sendMessage(chatId, '📸 Requesting live screenshot...').catch(console.error);
   }
 
+  function requestManualClick(chatId: number, userId: string, targetText: string) {
+    const normalizedTarget = normalizeClickTarget(targetText);
+    if (!normalizedTarget) {
+      bot!.sendMessage(chatId, '❌ Tell me what to click, for example: `click not now`.', {
+        parse_mode: 'Markdown',
+      }).catch(console.error);
+      return;
+    }
+
+    pushCommand({
+      userId,
+      type: 'manual_click',
+      payload: { targetText: normalizedTarget },
+    });
+
+    bot!.sendMessage(
+      chatId,
+      `🖱 *Manual click queued:* \`${normalizedTarget}\`\nI will ask the extension to click this on the LinkedIn tab.`,
+      { parse_mode: 'Markdown' }
+    ).catch(console.error);
+  }
+
   async function stopAgent(chatId: number, userId: string) {
     pushCommand({ userId, type: 'stop_agent', payload: {} });
     await stopOpenTasksForUser(userId);
@@ -553,6 +619,9 @@ export function startTelegramBot(token: string) {
       case 'apply':
         await startApply(msg.chat.id, user, intent.query || '', msg.text || '', intent.userGoal);
         return true;
+      case 'manual_click':
+        requestManualClick(msg.chat.id, user.id, intent.targetText || intent.query || '');
+        return true;
       case 'screenshot':
         requestScreenshot(msg.chat.id, user.id);
         return true;
@@ -597,6 +666,15 @@ export function startTelegramBot(token: string) {
     }
 
     await startApply(msg.chat.id, user, match?.[1] || '', msg.text || '', msg.text || '');
+  });
+
+  bot.onText(/\/click(?:\s+(.+))?/, async (msg, match) => {
+    const user = await getLinkedUser(msg.chat.id);
+    if (!user) {
+      sendSignInPrompt(msg.chat.id);
+      return;
+    }
+    requestManualClick(msg.chat.id, user.id, match?.[1] || '');
   });
 
   bot.onText(/\/stop/, async (msg) => {

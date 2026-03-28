@@ -305,6 +305,17 @@ async function runAgentLoop() {
       } else {
         lastSuccessSignature = '';
       }
+
+      if (applicationSuccessSignal) {
+        const closeResult = await sendMessageToAgentTab({ action: 'close_success_modal' }).catch(() => null);
+        if (closeResult?.closed) {
+          broadcastLog(`Success modal closed via ${closeResult.method || 'auto-close'}.`);
+          const refreshed = await getDOMSnapshotFromActiveTab();
+          if (refreshed) {
+            snapshot = refreshed;
+          }
+        }
+      }
     }
 
     if (!isOutreach) {

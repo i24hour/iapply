@@ -513,6 +513,145 @@ async function forceClickElement(element) {
   return true;
 }
 
+function getManualClickCandidateText(el) {
+  if (!el) return '';
+  const parts = [
+    el.getAttribute?.('aria-label') || '',
+    el.getAttribute?.('title') || '',
+    el.getAttribute?.('data-control-name') || '',
+    el.getAttribute?.('name') || '',
+    el instanceof HTMLInputElement ? el.value || '' : '',
+    el.textContent || '',
+  ];
+  return normalizeText(parts.join(' '));
+}
+
+function scoreManualClickCandidate(targetNorm, targetTokens, candidateText, el, inModal = false) {
+  if (!candidateText) return -999;
+  if (!isElementVisible(el)) return -999;
+
+  const disabled =
+    el.disabled ||
+    el.getAttribute?.('aria-disabled') === 'true' ||
+    el.getAttribute?.('disabled') !== null;
+  if (disabled) return -999;
+
+  let score = 0;
+  if (candidateText === targetNorm) {
+    score += 130;
+  } else if (candidateText.startsWith(targetNorm)) {
+    score += 105;
+  } else if (candidateText.includes(targetNorm)) {
+    score += 88;
+  } else if (targetNorm.includes(candidateText) && candidateText.length >= 3) {
+    score += 55;
+  }
+
+  let tokenHits = 0;
+  for (const token of targetTokens) {
+    if (candidateText.includes(token)) tokenHits += 1;
+  }
+  score += tokenHits * 12;
+  if (tokenHits === targetTokens.length && targetTokens.length > 0) {
+    score += 26;
+  }
+
+  if (el.tagName === 'BUTTON') score += 9;
+  if (el.getAttribute?.('role') === 'button') score += 7;
+  if (isCheckboxLikeElement(el)) score += 4;
+  if (inModal) score += 8;
+  if (candidateText.length > 140) score -= 8;
+  return score;
+}
+
+async function clickByVisibleText(targetTextRaw) {
+  const targetText = String(targetTextRaw || '').trim();
+  const targetNorm = normalizeText(targetText);
+  if (!targetNorm) {
+    return { success: false, reason: 'target_text_empty' };
+  }
+
+  const targetTokens = targetNorm.split(' ').filter((token) => token.length > 1);
+  const modal = getEasyApplyModal();
+  const roots = modal ? [modal, document] : [document];
+  const selectors = [
+    'button',
+    'a',
+    '[role="button"]',
+    '[role="checkbox"]',
+    '[role="radio"]',
+    'label',
+    'input[type="button"]',
+    'input[type="submit"]',
+    'input[type="checkbox"]',
+    'input[type="radio"]',
+  ].join(', ');
+
+  const seen = new Set();
+  let best = null;
+  let bestText = '';
+  let bestScore = -999;
+
+  for (const root of roots) {
+    const inModal = root === modal;
+    const candidates = Array.from(root.querySelectorAll(selectors));
+    for (const el of candidates) {
+      if (!(el instanceof HTMLElement)) continue;
+      if (seen.has(el)) continue;
+      seen.add(el);
+
+      const text = getManualClickCandidateText(el);
+      if (!text) continue;
+
+      const score = scoreManualClickCandidate(targetNorm, targetTokens, text, el, inModal);
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+        bestText = text;
+      }
+    }
+  }
+
+  // Fallback for progress actions when text targeting fails.
+  if (!best && /\b(next|review|continue|submit|done)\b/.test(targetNorm)) {
+    const progressBtn = findPrimaryProgressButtonInModal(modal);
+    if (progressBtn) {
+      best = progressBtn;
+      bestText = normalizeText(progressBtn.innerText || progressBtn.textContent || progressBtn.getAttribute('aria-label') || '');
+      bestScore = 70;
+    }
+  }
+
+  if (!best || bestScore < 32) {
+    return {
+      success: false,
+      reason: 'no_match_found',
+      bestCandidate: bestText || '',
+      bestScore,
+    };
+  }
+
+  if (isCheckboxLikeElement(best) || ((best.getAttribute('type') || '').toLowerCase() === 'checkbox')) {
+    const checked = await ensureCheckboxChecked(best);
+    if (checked) {
+      postAgentLog(`Manual click resolved checkbox "${bestText || targetText}".`);
+      return { success: true, matchedText: bestText, reason: 'checkbox_checked', score: bestScore };
+    }
+  }
+
+  if (best.tagName === 'INPUT' && ((best.getAttribute('type') || '').toLowerCase() === 'radio')) {
+    const resolved = await ensureRadioGroupSelected(best, getEasyApplyModal());
+    if (resolved) {
+      postAgentLog(`Manual click resolved radio option "${bestText || targetText}".`);
+      return { success: true, matchedText: bestText, reason: 'radio_selected', score: bestScore };
+    }
+  }
+
+  await forceClickElement(best);
+  postAgentLog(`Manual click executed for "${targetText}" -> "${bestText || targetText}".`);
+  return { success: true, matchedText: bestText, reason: 'clicked', score: bestScore };
+}
+
 // Scrape job listings from LinkedIn
 async function scrapeJobs() {
   const jobs = [];
@@ -1325,6 +1464,90 @@ async function setValidatedFieldValue(field, rawValue) {
 
 function getEasyApplyModal() {
   return document.querySelector('.jobs-easy-apply-modal, [role="dialog"].jobs-easy-apply-modal, .artdeco-modal');
+}
+
+function isApplicationSentSuccessText(text = '') {
+  const raw = normalizeText(text || '');
+  return (
+    raw.includes('your application was sent') ||
+    raw.includes('application was sent') ||
+    raw.includes('your application has been submitted') ||
+    raw.includes('application submitted') ||
+    raw.includes('applied tab of my jobs')
+  );
+}
+
+async function closeApplicationSuccessModal() {
+  const modal = getEasyApplyModal() || document.querySelector('[role="dialog"], .artdeco-modal');
+  if (!modal) {
+    return { closed: false, reason: 'no_modal' };
+  }
+
+  const modalText = modal.innerText || '';
+  if (!isApplicationSentSuccessText(modalText)) {
+    return { closed: false, reason: 'not_success_modal' };
+  }
+
+  const visibleButtons = Array.from(
+    modal.querySelectorAll('button, [role="button"], a, [role="link"]')
+  ).filter((el) => isElementVisible(el));
+
+  const pickByText = (predicate) => visibleButtons.find((el) => {
+    const text = normalizeText(el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '');
+    if (!text) return false;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+    return predicate(text);
+  });
+
+  const doneButton = pickByText((text) => text === 'done' || text.includes('done'));
+  if (doneButton) {
+    await forceClickElement(doneButton);
+    await sleep(220);
+    return { closed: true, method: 'done_button' };
+  }
+
+  const dismissButton = pickByText((text) =>
+    text.includes('dismiss') || text === 'close' || text.includes('close')
+  );
+  if (dismissButton) {
+    await forceClickElement(dismissButton);
+    await sleep(220);
+    return { closed: true, method: 'dismiss_button' };
+  }
+
+  const modalRect = modal.getBoundingClientRect();
+  let topRightCandidate = null;
+  let bestScore = -Infinity;
+  for (const el of visibleButtons) {
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+    const text = normalizeText(el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '');
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const nearTop = centerY <= modalRect.top + Math.max(90, modalRect.height * 0.22);
+    const nearRight = centerX >= modalRect.right - Math.max(90, modalRect.width * 0.22);
+    if (!nearTop || !nearRight) continue;
+
+    let score = 0;
+    if (text === 'x' || text === '×') score += 120;
+    if (text.includes('close') || text.includes('dismiss')) score += 110;
+    if (text.length <= 2) score += 20;
+    score += Math.max(0, 200 - Math.round(Math.abs(modalRect.right - centerX) + Math.abs(modalRect.top - centerY)));
+
+    if (score > bestScore) {
+      bestScore = score;
+      topRightCandidate = el;
+    }
+  }
+
+  if (topRightCandidate) {
+    await forceClickElement(topRightCandidate);
+    await sleep(220);
+    return { closed: true, method: 'top_right_icon' };
+  }
+
+  return { closed: false, reason: 'no_close_control_found' };
 }
 
 function listModalValidationIssues() {
@@ -2579,6 +2802,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       message.disallowedTokens,
       message.forceFix === true
     ).then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
+
+  if (message.action === 'close_success_modal') {
+    closeApplicationSuccessModal().then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
+
+  if (message.action === 'click_by_text') {
+    clickByVisibleText(message.targetText).then((result) => {
       sendResponse(result);
     });
     return true;

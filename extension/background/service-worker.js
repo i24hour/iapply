@@ -604,6 +604,43 @@ async function sendMessageWithRetry(tabId, message, retries = 5, delayMs = 1200)
   throw new Error('Could not start post outreach in LinkedIn tab after retries.');
 }
 
+async function executeManualClickCommand(targetTextRaw) {
+  const targetText = String(targetTextRaw || '').trim();
+  if (!targetText) {
+    await emitAgentLog('Manual click skipped: target text is empty.', true);
+    return;
+  }
+
+  const tab = await getPreferredLinkedInTab();
+  if (!tab?.id) {
+    await emitAgentLog(`Manual click failed for "${targetText}": no LinkedIn tab found.`, true);
+    return;
+  }
+
+  try {
+    await ensureLinkedInContentScript(tab.id);
+    const result = await sendMessageWithRetry(
+      tab.id,
+      { action: 'click_by_text', targetText },
+      3,
+      450
+    );
+
+    if (result?.success) {
+      const matched = result.matchedText ? ` -> "${result.matchedText}"` : '';
+      await emitAgentLog(`Manual click executed for "${targetText}"${matched}.`);
+      return;
+    }
+
+    await emitAgentLog(
+      `Manual click failed for "${targetText}": ${result?.reason || 'no matching clickable element'}.`,
+      true
+    );
+  } catch (error) {
+    await emitAgentLog(`Manual click error for "${targetText}": ${error.message || 'unknown error'}.`, true);
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'start_agent') {
     agentLogs = [];
@@ -940,6 +977,8 @@ async function pollTelegramBridge() {
       startLiveRecording();
     } else if (cmd.type === 'stop_recording') {
       stopLiveRecording();
+    } else if (cmd.type === 'manual_click') {
+      await executeManualClickCommand(cmd.payload?.targetText);
     }
 
     fetch(`${API_URL}/agent/complete/${cmd.id}`, {

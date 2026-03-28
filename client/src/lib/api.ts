@@ -106,6 +106,8 @@ export const extensionApi = {
     api.get('/agent/live', { params: { logs, screenshots, recordings } }),
   requestScreenshot: () =>
     api.post('/agent/request-screenshot'),
+  manualClick: (targetText: string) =>
+    api.post('/agent/manual-click', { targetText }),
   startRecording: () =>
     api.post('/agent/start-recording'),
   stopRecording: () =>

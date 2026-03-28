@@ -4,7 +4,13 @@
 export interface AgentCommand {
   id: string;
   userId: string;
-  type: 'start_agent' | 'stop_agent' | 'request_screenshot' | 'start_recording' | 'stop_recording';
+  type:
+    | 'start_agent'
+    | 'stop_agent'
+    | 'request_screenshot'
+    | 'start_recording'
+    | 'stop_recording'
+    | 'manual_click';
   payload: {
     searchQuery?: string;
     count?: number;
@@ -13,6 +19,7 @@ export interface AgentCommand {
     model?: string;
     apiKey?: string;
     taskId?: string;
+    targetText?: string;
   };
   status: 'pending' | 'in_progress' | 'completed';
   createdAt: Date;

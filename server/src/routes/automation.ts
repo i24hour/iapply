@@ -4,6 +4,7 @@ import { createError } from '../middleware/error-handler.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
 import { createTaskRun, stopOpenTasksForUser } from '../lib/usage-tracking.js';
+import { pushCommand } from '../lib/agent-commands.js';
 
 const router = Router();
 
@@ -170,6 +171,7 @@ router.post('/pause', authenticate, async (req: AuthRequest, res: Response, next
       .in('status', ['idle', 'running']);
 
     await stopOpenTasksForUser(req.userId!);
+    pushCommand({ userId: req.userId!, type: 'stop_agent', payload: {} });
 
     res.json({ success: true, message: 'Automation paused' });
   } catch (error) {
@@ -187,6 +189,7 @@ router.post('/stop', authenticate, async (req: AuthRequest, res: Response, next:
       .in('status', ['idle', 'running']);
 
     await stopOpenTasksForUser(req.userId!);
+    pushCommand({ userId: req.userId!, type: 'stop_agent', payload: {} });
 
     res.json({ success: true, message: 'Automation stopped' });
   } catch (error) {

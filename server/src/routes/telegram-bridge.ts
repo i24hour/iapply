@@ -104,6 +104,25 @@ router.post('/request-screenshot', authenticate, (req: AuthRequest, res: Respons
   return res.json({ success: true, data: { commandId: command.id } });
 });
 
+router.post('/manual-click', authenticate, (req: AuthRequest, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ success: false, error: 'Not authenticated' });
+  }
+
+  const targetText = String(req.body?.targetText || '').trim();
+  if (!targetText) {
+    return res.status(400).json({ success: false, error: 'targetText is required' });
+  }
+
+  const command = pushCommand({
+    userId: req.userId,
+    type: 'manual_click',
+    payload: { targetText: targetText.slice(0, 120) },
+  });
+
+  return res.json({ success: true, data: { commandId: command.id } });
+});
+
 router.post('/start-recording', authenticate, (req: AuthRequest, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
