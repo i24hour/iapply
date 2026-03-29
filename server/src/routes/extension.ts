@@ -29,10 +29,19 @@ router.get('/commands', authenticate, async (req: AuthRequest, res: Response, ne
       return res.json({ success: true, data: null });
     }
 
-    await supabase
+    const { error: markRunningError } = await supabase
       .from('agent_sessions')
       .update({ status: 'running' })
-      .eq('id', command.id);
+      .eq('id', command.id)
+      .eq('user_id', req.userId);
+
+    if (markRunningError) {
+      console.error('Failed to mark agent_session running:', markRunningError);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update agent session status',
+      });
+    }
 
     const taskRun = await getTaskRunByAgentSession(command.id);
 

@@ -42,11 +42,11 @@ function extractSearchQueryFromCommand(commandText = ''): string {
 // Get automation status
 router.get('/status', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { data: activeCommand } = await supabase
+    const { data: runningCommand } = await supabase
       .from('agent_sessions')
       .select('*')
       .eq('user_id', req.userId)
-      .in('status', ['running', 'idle'])
+      .eq('status', 'running')
       .order('started_at', { ascending: false })
       .limit(1)
       .single();
@@ -58,12 +58,12 @@ router.get('/status', authenticate, async (req: AuthRequest, res: Response, next
     res.json({
       success: true,
       data: {
-        isRunning: !!activeCommand,
-        currentAction: activeCommand?.status === 'running' ? 'applying' : 'idle',
+        isRunning: !!runningCommand,
+        currentAction: runningCommand ? 'applying' : 'idle',
         jobsScraped: total || 0,
         jobsApplied: applied || 0,
         jobsFailed: failed || 0,
-        startedAt: activeCommand?.started_at,
+        startedAt: runningCommand?.started_at,
       },
     });
   } catch (error) {

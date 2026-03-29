@@ -25,6 +25,8 @@ let captureInFlightStartedAt = 0;
 let lastCaptureFailureLogAt = 0;
 let startPipelineToken = 0;
 let lastStopAtMs = 0;
+const handledFrontendCommandAt = new Map();
+const HANDLED_FRONTEND_COMMAND_TTL_MS = 10 * 60 * 1000;
 
 function beginStartPipeline({ explicit = false } = {}) {
   startPipelineToken += 1;
@@ -62,6 +64,31 @@ async function completeFrontendSessionIfPresent(sessionId) {
   } catch {
     // Best effort cleanup only.
   }
+}
+
+function pruneHandledFrontendCommands(now = Date.now()) {
+  for (const [id, ts] of handledFrontendCommandAt.entries()) {
+    if (now - ts > HANDLED_FRONTEND_COMMAND_TTL_MS) {
+      handledFrontendCommandAt.delete(id);
+    }
+  }
+}
+
+function isDuplicateFrontendCommand(commandId) {
+  const id = String(commandId || '').trim();
+  if (!id) return false;
+  const now = Date.now();
+  pruneHandledFrontendCommands(now);
+  const seenAt = handledFrontendCommandAt.get(id);
+  if (!seenAt) return false;
+  return now - seenAt < HANDLED_FRONTEND_COMMAND_TTL_MS;
+}
+
+function markFrontendCommandHandled(commandId) {
+  const id = String(commandId || '').trim();
+  if (!id) return;
+  pruneHandledFrontendCommands();
+  handledFrontendCommandAt.set(id, Date.now());
 }
 
 function appendAgentLog(message, isError = false) {
@@ -992,6 +1019,12 @@ async function pollFrontendCommands() {
       await completeFrontendSessionIfPresent(cmd?.id);
       return;
     }
+    if (isDuplicateFrontendCommand(cmd?.id)) {
+      emitAgentLog(`Ignoring duplicate frontend session command: ${cmd?.id || 'unknown'}.`, true).catch(() => {});
+      await completeFrontendSessionIfPresent(cmd?.id);
+      return;
+    }
+    markFrontendCommandHandled(cmd?.id);
 
     const startToken = beginStartPipeline();
     const settings = await new Promise((resolve) => {
@@ -1026,6 +1059,7 @@ async function pollFrontendCommands() {
     });
     if (isStartPipelineCanceled(startToken)) {
       emitAgentLog('Frontend start canceled before launch (stop/new command received).', true).catch(() => {});
+      await completeFrontendSessionIfPresent(cmd?.id);
       return;
     }
     if (resumeConfig.generatedResume?.resumeId && resumeConfig.selectedResume?.file_name) {
