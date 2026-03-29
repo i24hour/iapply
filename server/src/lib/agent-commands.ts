@@ -15,6 +15,8 @@ export interface AgentCommand {
     searchQuery?: string;
     count?: number;
     userGoal?: string;
+    applyMode?: 'easy' | 'apply' | 'easy_jd_resume';
+    resumeMode?: 'easy' | 'apply' | 'easy_jd_resume';
     provider?: string;
     model?: string;
     apiKey?: string;

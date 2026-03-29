@@ -132,6 +132,8 @@ lsof -ti:3001 | xargs kill -9
 | PUT    | `/profile`       | Update profile |
 | POST   | `/resume/upload` | Upload resume  |
 | GET    | `/resume`        | Get resume     |
+| POST   | `/resume/generate` | Generate tailored DOCX resume |
+| GET    | `/resume/:id/file` | Download/stream a stored resume file |
 
 ### Automation
 

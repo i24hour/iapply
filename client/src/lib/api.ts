@@ -90,6 +90,8 @@ export const automationApi = {
       channel?: string;
       commandText?: string;
       searchQuery?: string;
+      applyMode?: 'easy' | 'apply' | 'easy_jd_resume';
+      resumeMode?: 'easy' | 'apply' | 'easy_jd_resume';
       provider?: string;
       model?: string;
       apiKey?: string;

@@ -30,7 +30,15 @@ type RecordingFrame = {
 };
 
 type CommandCategory = 'extension' | 'local' | 'info';
-type ApplyMode = 'easy' | 'apply';
+type ApplyMode = 'easy' | 'apply' | 'easy_jd_resume';
+
+type SessionGeneratedResume = {
+  resumeId: string;
+  fileName: string;
+  jobTitle: string;
+  company: string;
+  generatedAt: string;
+};
 
 interface ParsedCommand {
   action: string;
@@ -39,6 +47,29 @@ interface ParsedCommand {
   applyMode?: ApplyMode;
   searchQuery?: string;
   targetText?: string;
+}
+
+function parseGeneratedResumeLog(rawMessage: string): SessionGeneratedResume | null {
+  const marker = 'JD_RESUME_READY::';
+  if (!String(rawMessage || '').startsWith(marker)) return null;
+  const payloadText = String(rawMessage || '').slice(marker.length).trim();
+  if (!payloadText) return null;
+
+  try {
+    const payload = JSON.parse(payloadText) as Record<string, unknown>;
+    const resumeId = String(payload.resumeId || '').trim();
+    if (!resumeId) return null;
+
+    return {
+      resumeId,
+      fileName: String(payload.fileName || 'generated-resume.docx').trim() || 'generated-resume.docx',
+      jobTitle: String(payload.jobTitle || 'Role').trim() || 'Role',
+      company: String(payload.company || 'Company').trim() || 'Company',
+      generatedAt: String(payload.generatedAt || new Date().toISOString()),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function extractSearchQueryFromApplyText(text: string): string {
@@ -246,6 +277,7 @@ export function ChatBot() {
     useDashboardStore();
   const [input, setInput] = useState('');
   const [selectedApplyMode, setSelectedApplyMode] = useState<ApplyMode>('easy');
+  const [sessionGeneratedResumes, setSessionGeneratedResumes] = useState<SessionGeneratedResume[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [recordingFrames, setRecordingFrames] = useState<RecordingFrame[]>([]);
   const [isRecordingActive, setIsRecordingActive] = useState(false);
@@ -294,6 +326,20 @@ export function ChatBot() {
             latest.forEach((log: any) => {
               const key = `${log.timestamp}|${log.message}|${log.isError ? '1' : '0'}`;
               lastLogRef.current = key;
+
+              const generatedResume = parseGeneratedResumeLog(String(log.message || ''));
+              if (generatedResume) {
+                setSessionGeneratedResumes((prev) => {
+                  if (prev.some((item) => item.resumeId === generatedResume.resumeId)) return prev;
+                  return [generatedResume, ...prev].slice(0, 20);
+                });
+                addMessage({
+                  role: 'bot',
+                  content: `🧠 **JD Resume Generated**\n\n• **Role:** ${generatedResume.jobTitle}\n• **Company:** ${generatedResume.company}\n• **File:** ${generatedResume.fileName}`,
+                });
+                return;
+              }
+
               addMessage({
                 role: 'bot',
                 content: `${log.isError ? '❌' : '🧾'} **Extension Log**: ${log.message}`,
@@ -335,7 +381,7 @@ export function ChatBot() {
         case 'start': {
           const applyMode: ApplyMode = command.applyMode || 'apply';
 
-          if (applyMode === 'apply' && !resume) {
+          if ((applyMode === 'apply' || applyMode === 'easy_jd_resume') && !resume) {
             addMessage({
               role: 'bot',
               content:
@@ -359,6 +405,8 @@ export function ChatBot() {
             channel: 'dashboard_chat',
             commandText: rawCommandText,
             searchQuery: command.searchQuery,
+            applyMode,
+            resumeMode: applyMode,
             provider: 'gemini',
           });
           setAutomationStatus({ ...automationStatus, isRunning: true, currentAction: 'scrape_jobs' });
@@ -367,6 +415,14 @@ export function ChatBot() {
             addMessage({
               role: 'bot',
               content: `⚡ **Easy Apply Started!** Running for **${count} jobs**.\n\nThis mode does **not require uploaded resume** in iApply and relies on your LinkedIn Easy Apply setup.\n\n💡 You can say:\n• **"status"** — check progress\n• **"pause"** — pause automation\n• **"stop"** — cancel everything`,
+            });
+            break;
+          }
+
+          if (applyMode === 'easy_jd_resume') {
+            addMessage({
+              role: 'bot',
+              content: `🧠 **Easy Apply with JD Resume Started!** Running for **${count} jobs**.\n\nFor each Easy Apply job, extension JD context pickup karega, backend tailored resume generate karega, aur wahi resume upload+select karke apply karega.\n\nSession me generated resumes yahin chat me dikhte rahenge.\n\n💡 You can say:\n• **"status"** — check progress\n• **"pause"** — pause automation\n• **"stop"** — cancel everything`,
             });
             break;
           }
@@ -604,7 +660,7 @@ export function ChatBot() {
           addMessage({
             role: 'bot',
             content:
-              '🤖 **Here\'s what I can do:**\n\n**Job Automation** _(sent to extension)_\n• **"Easy apply 5 jobs"** — Start Easy Apply mode (no iApply resume required)\n• **"Apply 5 jobs"** — Start apply mode (requires uploaded resume)\n• **"Apply 10 jobs based on my profile"** — Same, explicit\n• **"Pause"** — Pause current automation\n• **"Stop"** — Stop and reset\n• **"Resume"** — Resume paused automation\n\n**Manual Control**\n• **"click not now"**\n• **"not now ko click krdo"**\n• **"tap continue"**\n\n**Live Monitoring**\n• **"logs"** or **"live feed"** — Confirm live stream mode\n• **"screenshot"** — Request an instant capture from extension\n• **"start recording"** — Force recording ON\n• **"stop recording"** — Force recording OFF\n• Extension logs and latest captures are auto-posted here\n\n**Info & Status**\n• **"Status"** — Check automation progress\n• **"Show applications"** — See recent applications\n• **"Stats"** — View your numbers\n\n**Profile & Settings**\n• **"Show my profile"** — View profile info\n• **"Show resume"** — View resume details\n• **"Preferences"** — View job preferences',
+              '🤖 **Here\'s what I can do:**\n\n**Job Automation** _(sent to extension)_\n• **"Easy apply 5 jobs"** — Easy Apply mode (no iApply resume required)\n• **"Apply 5 jobs"** — Apply mode (uses uploaded resume flow)\n• **Mode toggle: "Easy Apply with JD resume"** — per-job tailored resume generation\n• **"Pause"** — Pause current automation\n• **"Stop"** — Stop and reset\n• **"Resume"** — Resume paused automation\n\n**Manual Control**\n• **"click not now"**\n• **"not now ko click krdo"**\n• **"tap continue"**\n\n**Live Monitoring**\n• **"logs"** or **"live feed"** — Confirm live stream mode\n• **"screenshot"** — Request an instant capture from extension\n• **"start recording"** — Force recording ON\n• **"stop recording"** — Force recording OFF\n• Extension logs and latest captures are auto-posted here\n\n**Info & Status**\n• **"Status"** — Check automation progress\n• **"Show applications"** — See recent applications\n• **"Stats"** — View your numbers\n\n**Profile & Settings**\n• **"Show my profile"** — View profile info\n• **"Show resume"** — View resume details\n• **"Preferences"** — View job preferences',
           });
           break;
         }
@@ -750,6 +806,25 @@ export function ChatBot() {
           </div>
         )}
 
+        {sessionGeneratedResumes.length > 0 && (
+          <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                Generated In This Session
+              </p>
+              <p className="text-xs text-emerald-700">{sessionGeneratedResumes.length} resumes</p>
+            </div>
+            <div className="space-y-2">
+              {sessionGeneratedResumes.slice(0, 5).map((item) => (
+                <div key={item.resumeId} className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                  <p className="text-sm font-medium text-gray-800">{item.jobTitle} • {item.company}</p>
+                  <p className="text-xs text-gray-600">{item.fileName}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
@@ -828,6 +903,18 @@ export function ChatBot() {
             Easy Apply (no resume)
           </button>
           <button
+            onClick={() => setSelectedApplyMode('easy_jd_resume')}
+            disabled={isProcessing}
+            className={cn(
+              'text-xs rounded-full px-3 py-1.5 transition border',
+              selectedApplyMode === 'easy_jd_resume'
+                ? 'bg-primary-600 text-white border-primary-600'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            )}
+          >
+            Easy Apply with JD resume
+          </button>
+          <button
             onClick={() => setSelectedApplyMode('apply')}
             disabled={isProcessing}
             className={cn(
@@ -847,7 +934,7 @@ export function ChatBot() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder='Try "Apply 5 jobs" or "Show status"...'
+            placeholder='Try "Apply for product manager", "Easy apply 5 jobs", or "Show status"...'
             className="flex-1 rounded-full border border-gray-200 bg-white px-4 py-3 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500 sm:px-5"
             disabled={isProcessing}
           />

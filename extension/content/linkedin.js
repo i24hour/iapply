@@ -88,6 +88,12 @@ function normalizeText(value) {
   return (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function compactText(value, maxLen = 0) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!maxLen || normalized.length <= maxLen) return normalized;
+  return normalized.slice(0, maxLen);
+}
+
 function extractEmails(text) {
   const matches = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi);
   return Array.from(new Set(matches || []));
@@ -2060,6 +2066,113 @@ async function revealAllResumeOptions(modal) {
   return expanded;
 }
 
+function findResumeUploadButton(modal = getEasyApplyModal()) {
+  if (!modal) return null;
+  return (
+    Array.from(modal.querySelectorAll('button, [role="button"], label')).find((el) => {
+      const text = normalizeText(el.innerText || el.textContent || el.getAttribute('aria-label') || '');
+      return text.includes('upload') && text.includes('resume');
+    }) || null
+  );
+}
+
+function findResumeFileInput(modal = getEasyApplyModal()) {
+  if (!modal) return null;
+  const selectors = [
+    'input[type="file"][name*="resume" i]',
+    'input[type="file"][accept*=".pdf" i]',
+    'input[type="file"][accept*=".doc" i]',
+    'input[type="file"]',
+  ];
+  for (const selector of selectors) {
+    const found = modal.querySelector(selector);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function waitForResumeFileInput(modal = getEasyApplyModal(), timeoutMs = 3500) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const input = findResumeFileInput(modal);
+    if (input) return input;
+    await sleep(100);
+  }
+  return null;
+}
+
+function decodeBase64ToBytes(base64) {
+  const clean = String(base64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+  if (!clean) return new Uint8Array();
+  const raw = atob(clean);
+  const bytes = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index += 1) {
+    bytes[index] = raw.charCodeAt(index);
+  }
+  return bytes;
+}
+
+async function uploadGeneratedResumeToModal({ fileName, mimeType, fileBase64 } = {}) {
+  const modal = getEasyApplyModal();
+  if (!modal) return { uploaded: false, reason: 'no easy apply modal' };
+
+  if (!fileBase64) return { uploaded: false, reason: 'missing file payload' };
+  const resolvedFileName = String(fileName || '').trim() || `resume-${Date.now()}.docx`;
+  const resolvedMimeType = String(mimeType || '').trim() || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+  let input = findResumeFileInput(modal);
+  if (!input) {
+    const uploadButton = findResumeUploadButton(modal);
+    if (uploadButton) {
+      await forceClickElement(uploadButton);
+      await sleep(240);
+    }
+    input = await waitForResumeFileInput(modal, 4200);
+  }
+
+  if (!input) {
+    return { uploaded: false, reason: 'resume file input not found' };
+  }
+
+  const bytes = decodeBase64ToBytes(fileBase64);
+  if (!bytes.length) {
+    return { uploaded: false, reason: 'file payload empty' };
+  }
+
+  const file = new File([bytes], resolvedFileName, {
+    type: resolvedMimeType,
+    lastModified: Date.now(),
+  });
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+  try {
+    input.files = transfer.files;
+  } catch (_error) {
+    return { uploaded: false, reason: 'browser blocked file assignment' };
+  }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+
+  postAgentLog(`Uploaded generated resume "${resolvedFileName}" into LinkedIn form.`);
+  await sleep(1200);
+  await revealAllResumeOptions(getEasyApplyModal());
+
+  const modalAfter = getEasyApplyModal();
+  const cards = getVisibleResumeCards(modalAfter);
+  const normalizedName = normalizeResumeName(resolvedFileName);
+  const matchedCard = cards.find((card) => {
+    const name = normalizeResumeName(extractResumeCardName(card));
+    return name && (name.includes(normalizedName) || normalizedName.includes(name));
+  });
+
+  return {
+    uploaded: true,
+    fileName: resolvedFileName,
+    matched: Boolean(matchedCard),
+    matchedName: matchedCard ? extractResumeCardName(matchedCard) : '',
+  };
+}
+
 async function autoSelectBestResume(
   preferredResumeName,
   resumeKeyword,
@@ -2235,6 +2348,71 @@ async function autoSelectBestResume(
   postAgentLog(`Resume "${targetCard.name}" is now committed for this application step.`);
 
   return { changed: true, selectedName: targetCard.name, selectionCommitted: true };
+}
+
+function extractCurrentJobContext() {
+  const titleSelectors = [
+    '.jobs-unified-top-card h1',
+    '.jobs-unified-top-card__job-title',
+    '.job-details-jobs-unified-top-card__job-title h1',
+    '.job-details-jobs-unified-top-card__job-title',
+    'h1.t-24',
+  ];
+  const companySelectors = [
+    '.jobs-unified-top-card__company-name a',
+    '.jobs-unified-top-card__company-name',
+    '.job-details-jobs-unified-top-card__company-name a',
+    '.job-details-jobs-unified-top-card__company-name',
+    '.jobs-unified-top-card__primary-description a',
+  ];
+  const descriptionSelectors = [
+    '.jobs-description-content__text',
+    '.jobs-box__html-content',
+    '.jobs-description__container',
+    '.jobs-description',
+    '#job-details',
+  ];
+
+  const pickFirstText = (selectors) => {
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      const value = compactText(node?.textContent || node?.innerText || '');
+      if (value) return value;
+    }
+    return '';
+  };
+
+  const pickLongestText = (selectors) => {
+    let best = '';
+    for (const selector of selectors) {
+      const nodes = Array.from(document.querySelectorAll(selector));
+      for (const node of nodes) {
+        const text = compactText(node?.textContent || node?.innerText || '');
+        if (text.length > best.length) best = text;
+      }
+    }
+    return best;
+  };
+
+  const selectedCardJobLink =
+    document.querySelector(
+      '.jobs-search-results__list-item--active a[href*="/jobs/view/"], .job-card-container--selected a[href*="/jobs/view/"]'
+    ) ||
+    document.querySelector('a[href*="/jobs/view/"][aria-current="true"]');
+  const selectedJobHref = selectedCardJobLink?.getAttribute?.('href') || '';
+
+  let jobDescription = pickLongestText(descriptionSelectors);
+  if (!jobDescription) {
+    jobDescription = compactText(document.body?.innerText || '', 5000);
+  }
+
+  return {
+    jobTitle: compactText(pickFirstText(titleSelectors), 220),
+    company: compactText(pickFirstText(companySelectors), 220),
+    jobDescription: compactText(jobDescription, 12000),
+    jobUrl: selectedJobHref || window.location.href,
+    extractedAt: new Date().toISOString(),
+  };
 }
 
 function buildDOMSnapshot() {
@@ -2759,6 +2937,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'extract_current_job_context') {
+    sendResponse({ context: extractCurrentJobContext() });
+    return true;
+  }
+
   if (message.action === 'auto_select_resume') {
     autoSelectBestResume(
       message.preferredResumeName,
@@ -2767,6 +2950,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       message.expectedTokens,
       message.disallowedTokens
     ).then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
+
+  if (message.action === 'upload_generated_resume') {
+    uploadGeneratedResumeToModal({
+      fileName: message.fileName,
+      mimeType: message.mimeType,
+      fileBase64: message.fileBase64,
+    }).then((result) => {
       sendResponse(result);
     });
     return true;

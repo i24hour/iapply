@@ -365,6 +365,13 @@ function normalizeResumeToken(value = '') {
     .trim();
 }
 
+function normalizeResumeMode(mode = '') {
+  const normalized = String(mode || '').toLowerCase().trim();
+  if (normalized === 'easy_jd_resume' || normalized === 'easy-jd-resume') return 'easy_jd_resume';
+  if (normalized === 'easy') return 'easy';
+  return 'apply';
+}
+
 function tokenizeResumeQuery(searchQuery = '') {
   const stopWords = new Set([
     'and', 'with', 'for', 'the', 'from', 'this', 'that', 'role', 'job', 'jobs',
@@ -553,6 +560,85 @@ async function fetchAndSelectResume(searchQuery) {
   }
 }
 
+async function generateTailoredResume({ searchQuery, userGoal = '', source = 'extension' } = {}) {
+  const query = String(searchQuery || '').trim();
+  if (!query) return null;
+
+  const headers = await getAuthHeaders();
+  if (!headers.Authorization) return null;
+
+  try {
+    const response = await fetch(`${API_URL}/resume/generate`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        searchQuery: query,
+        jobTitle: query,
+        jobDescription: String(userGoal || '').slice(0, 12000),
+        source,
+      }),
+    });
+
+    if (!response.ok) {
+      const details = await response.text().catch(() => '');
+      return {
+        error: `resume_generate_failed:${response.status}${details ? `:${details.slice(0, 120)}` : ''}`,
+      };
+    }
+
+    const data = await response.json();
+    const resume = data?.data?.resume || null;
+    const generated = data?.data?.generated || null;
+    if (!resume || !generated?.resumeId) {
+      return { error: 'resume_generate_invalid_payload' };
+    }
+
+    return { resume, generated };
+  } catch {
+    return { error: 'resume_generate_exception' };
+  }
+}
+
+async function resolveResumeConfigForRun({
+  searchQuery,
+  userGoal = '',
+  source = 'extension',
+  resumeMode = 'apply',
+} = {}) {
+  const intentProfile = buildResumeIntentProfile(searchQuery);
+  const normalizedMode = normalizeResumeMode(resumeMode);
+  // In JD mode, generation happens per job inside agent-core when a new Easy Apply modal opens.
+  const shouldGeneratePerRunResume = false;
+  const generatedResult = shouldGeneratePerRunResume
+    ? await generateTailoredResume({ searchQuery, userGoal, source })
+    : null;
+
+  if (generatedResult?.resume && generatedResult?.generated?.resumeId) {
+    return {
+      selectedResume: generatedResult.resume,
+      candidateResume: generatedResult.resume,
+      generatedResume: generatedResult.generated,
+      resumeIntentTokens: intentProfile.requiredAnyTokens || [],
+      resumeDisallowedTokens: intentProfile.disallowedTokens || [],
+      resumeSelectionConfident: true,
+      selectionReason: 'generated',
+    };
+  }
+
+  const fallback = await fetchAndSelectResume(searchQuery);
+  return {
+    selectedResume: fallback?.resume || null,
+    candidateResume: fallback?.candidate || null,
+    generatedResume: null,
+    resumeIntentTokens: fallback?.intentProfile?.requiredAnyTokens || intentProfile.requiredAnyTokens || [],
+    resumeDisallowedTokens: fallback?.intentProfile?.disallowedTokens || intentProfile.disallowedTokens || [],
+    resumeSelectionConfident: Boolean(fallback?.confident),
+    selectionReason: fallback?.reason || generatedResult?.error || 'fallback_none',
+    bestScore: fallback?.bestScore,
+    margin: fallback?.margin,
+  };
+}
+
 function waitForTabLoad(tabId, urlIncludes = 'linkedin.com') {
   return new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
@@ -663,25 +749,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       const searchQuery = message.config?.searchQuery || '';
-      const resumeSelection = await fetchAndSelectResume(searchQuery);
-      if (resumeSelection?.confident && resumeSelection?.resume) {
-        emitAgentLog(`Resume selected for "${searchQuery}": ${resumeSelection.resume.file_name} (score=${resumeSelection.bestScore}, margin=${resumeSelection.margin})`).catch(() => {});
-      } else if (resumeSelection?.candidate) {
+      const resumeMode = normalizeResumeMode(message.config?.resumeMode || message.config?.applyMode);
+      const resumeConfig = await resolveResumeConfigForRun({
+        searchQuery,
+        userGoal: message.config?.userGoal || message.config?.searchQuery || '',
+        source: message.config?.source || 'extension',
+        resumeMode,
+      });
+
+      if (resumeConfig.generatedResume?.resumeId && resumeConfig.selectedResume?.file_name) {
+        emitAgentLog(`Generated tailored resume for "${searchQuery}": ${resumeConfig.selectedResume.file_name}`).catch(() => {});
+      } else if (resumeConfig.resumeSelectionConfident && resumeConfig.selectedResume) {
+        emitAgentLog(`Resume selected for "${searchQuery}": ${resumeConfig.selectedResume.file_name} (score=${resumeConfig.bestScore}, margin=${resumeConfig.margin})`).catch(() => {});
+      } else if (resumeConfig.candidateResume) {
         emitAgentLog(
-          `Resume selection low-confidence for "${searchQuery}" (${resumeSelection.reason}). Candidate was "${resumeSelection.candidate.file_name}". Submit will be blocked unless intent matches.`,
+          `Resume selection low-confidence for "${searchQuery}" (${resumeConfig.selectionReason}). Candidate was "${resumeConfig.candidateResume.file_name}". Submit will be blocked unless intent matches.`,
           true
         ).catch(() => {});
       }
 
       startAgent({
         ...message.config,
+        resumeMode,
         taskId,
         source: message.config?.source || 'extension',
         channel: message.config?.channel || 'extension_popup',
-        selectedResume: resumeSelection?.resume || null,
-        resumeIntentTokens: resumeSelection?.intentProfile?.requiredAnyTokens || [],
-        resumeDisallowedTokens: resumeSelection?.intentProfile?.disallowedTokens || [],
-        resumeSelectionConfident: Boolean(resumeSelection?.confident),
+        selectedResume: resumeConfig.selectedResume || null,
+        generatedResume: resumeConfig.generatedResume || null,
+        resumeIntentTokens: resumeConfig.resumeIntentTokens || [],
+        resumeDisallowedTokens: resumeConfig.resumeDisallowedTokens || [],
+        resumeSelectionConfident: Boolean(resumeConfig.resumeSelectionConfident),
       });
       startLiveRecording();
       sendResponse({ success: true, taskId });
@@ -852,6 +949,7 @@ async function pollFrontendCommands() {
       apiKey: cmd.payload?.apiKey || settings.llm_api_key || '',
       model: cmd.payload?.model || settings.llm_model || 'gemini-3.1-flash-lite-preview',
       baseUrl: cmd.payload?.baseUrl || settings.llm_base_url || '',
+      resumeMode: normalizeResumeMode(cmd.payload?.resumeMode || cmd.payload?.applyMode),
       searchQuery,
       count: Number(cmd.payload?.count) > 0 ? Number(cmd.payload.count) : 10,
       taskId: cmd.payload?.taskId || null,
@@ -860,19 +958,28 @@ async function pollFrontendCommands() {
       agentSessionId: cmd.id,
     };
 
-    const resumeSelection = await fetchAndSelectResume(searchQuery);
-    if (resumeSelection?.resume) {
-      config.selectedResume = resumeSelection.resume;
-      emitAgentLog(`Resume selected for "${searchQuery}": ${resumeSelection.resume.file_name} (score=${resumeSelection.bestScore}, margin=${resumeSelection.margin})`).catch(() => {});
-    } else if (resumeSelection?.candidate) {
+    const resumeConfig = await resolveResumeConfigForRun({
+      searchQuery,
+      userGoal: payloadCommandText || searchQuery,
+      source: 'frontend',
+      resumeMode: config.resumeMode,
+    });
+    if (resumeConfig.generatedResume?.resumeId && resumeConfig.selectedResume?.file_name) {
+      config.selectedResume = resumeConfig.selectedResume;
+      config.generatedResume = resumeConfig.generatedResume;
+      emitAgentLog(`Generated tailored resume for "${searchQuery}": ${resumeConfig.selectedResume.file_name}`).catch(() => {});
+    } else if (resumeConfig.selectedResume) {
+      config.selectedResume = resumeConfig.selectedResume;
+      emitAgentLog(`Resume selected for "${searchQuery}": ${resumeConfig.selectedResume.file_name} (score=${resumeConfig.bestScore}, margin=${resumeConfig.margin})`).catch(() => {});
+    } else if (resumeConfig.candidateResume) {
       emitAgentLog(
-        `Resume selection low-confidence for "${searchQuery}" (${resumeSelection.reason}). Candidate was "${resumeSelection.candidate.file_name}". Submit will be blocked unless intent matches.`,
+        `Resume selection low-confidence for "${searchQuery}" (${resumeConfig.selectionReason}). Candidate was "${resumeConfig.candidateResume.file_name}". Submit will be blocked unless intent matches.`,
         true
       ).catch(() => {});
     }
-    config.resumeIntentTokens = resumeSelection?.intentProfile?.requiredAnyTokens || [];
-    config.resumeDisallowedTokens = resumeSelection?.intentProfile?.disallowedTokens || [];
-    config.resumeSelectionConfident = Boolean(resumeSelection?.confident);
+    config.resumeIntentTokens = resumeConfig.resumeIntentTokens || [];
+    config.resumeDisallowedTokens = resumeConfig.resumeDisallowedTokens || [];
+    config.resumeSelectionConfident = Boolean(resumeConfig.resumeSelectionConfident);
 
     startAgent(config);
     startLiveRecording();
@@ -903,6 +1010,7 @@ async function pollTelegramBridge() {
         apiKey: cmd.payload.apiKey || settings.llm_api_key || '',
         model: cmd.payload.model || settings.llm_model || '',
         baseUrl: settings.llm_base_url || '',
+        resumeMode: normalizeResumeMode(cmd.payload?.resumeMode || cmd.payload?.applyMode),
         searchQuery: cmd.payload.searchQuery || 'Software Engineer',
         count: Number(cmd.payload.count) > 0 ? Number(cmd.payload.count) : 10,
         userGoal: cmd.payload.userGoal || cmd.payload.searchQuery || 'Apply to relevant LinkedIn jobs.',
@@ -911,19 +1019,28 @@ async function pollTelegramBridge() {
         channel: 'telegram_bot',
       };
 
-      const resumeSelection = await fetchAndSelectResume(config.searchQuery);
-      if (resumeSelection?.resume) {
-        config.selectedResume = resumeSelection.resume;
-        emitAgentLog(`Resume selected for "${config.searchQuery}": ${resumeSelection.resume.file_name} (score=${resumeSelection.bestScore}, margin=${resumeSelection.margin})`).catch(() => {});
-      } else if (resumeSelection?.candidate) {
+      const resumeConfig = await resolveResumeConfigForRun({
+        searchQuery: config.searchQuery,
+        userGoal: config.userGoal || config.searchQuery,
+        source: 'telegram',
+        resumeMode: config.resumeMode,
+      });
+      if (resumeConfig.generatedResume?.resumeId && resumeConfig.selectedResume?.file_name) {
+        config.selectedResume = resumeConfig.selectedResume;
+        config.generatedResume = resumeConfig.generatedResume;
+        emitAgentLog(`Generated tailored resume for "${config.searchQuery}": ${resumeConfig.selectedResume.file_name}`).catch(() => {});
+      } else if (resumeConfig.selectedResume) {
+        config.selectedResume = resumeConfig.selectedResume;
+        emitAgentLog(`Resume selected for "${config.searchQuery}": ${resumeConfig.selectedResume.file_name} (score=${resumeConfig.bestScore}, margin=${resumeConfig.margin})`).catch(() => {});
+      } else if (resumeConfig.candidateResume) {
         emitAgentLog(
-          `Resume selection low-confidence for "${config.searchQuery}" (${resumeSelection.reason}). Candidate was "${resumeSelection.candidate.file_name}". Submit will be blocked unless intent matches.`,
+          `Resume selection low-confidence for "${config.searchQuery}" (${resumeConfig.selectionReason}). Candidate was "${resumeConfig.candidateResume.file_name}". Submit will be blocked unless intent matches.`,
           true
         ).catch(() => {});
       }
-      config.resumeIntentTokens = resumeSelection?.intentProfile?.requiredAnyTokens || [];
-      config.resumeDisallowedTokens = resumeSelection?.intentProfile?.disallowedTokens || [];
-      config.resumeSelectionConfident = Boolean(resumeSelection?.confident);
+      config.resumeIntentTokens = resumeConfig.resumeIntentTokens || [];
+      config.resumeDisallowedTokens = resumeConfig.resumeDisallowedTokens || [];
+      config.resumeSelectionConfident = Boolean(resumeConfig.resumeSelectionConfident);
 
       startAgent(config);
       startLiveRecording();

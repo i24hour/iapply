@@ -34,6 +34,9 @@ let resumeEditAttempts = 0;
 let resumeStepSeenForCurrentApplication = false;
 let resumeStepProbeAttempted = false;
 let resumeStepBypassLoggedForCurrentApplication = false;
+let generatedResumeUploadAttemptedForCurrentApplication = false;
+let generatedResumeUploadedForCurrentApplication = false;
+let currentGeneratedResumeModalKey = '';
 const MIN_MAX_STEPS = 400;
 const MAX_STEPS_PER_APPLICATION = 180;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
@@ -147,6 +150,9 @@ export async function startAgent(config) {
   resumeStepSeenForCurrentApplication = false;
   resumeStepProbeAttempted = false;
   resumeStepBypassLoggedForCurrentApplication = false;
+  generatedResumeUploadAttemptedForCurrentApplication = false;
+  generatedResumeUploadedForCurrentApplication = false;
+  currentGeneratedResumeModalKey = '';
 
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
   if (settings.selectedResume) {
@@ -227,6 +233,9 @@ export function stopAgent() {
   resumeStepSeenForCurrentApplication = false;
   resumeStepProbeAttempted = false;
   resumeStepBypassLoggedForCurrentApplication = false;
+  generatedResumeUploadAttemptedForCurrentApplication = false;
+  generatedResumeUploadedForCurrentApplication = false;
+  currentGeneratedResumeModalKey = '';
   broadcastLog('Stopped by user.');
   updateTaskStatus('stopped');
   completeAutomationSession();
@@ -319,7 +328,11 @@ async function runAgentLoop() {
     }
 
     if (!isOutreach) {
-      const modalKey = extractCurrentApplicationModalKey(snapshot.rawText);
+      const modalLabel = extractCurrentApplicationModalKey(snapshot.rawText);
+      const jobKey = extractJobKeyFromUrl(snapshot.url);
+      const modalKey = modalLabel ? `${modalLabel}|${jobKey || 'job-unknown'}` : '';
+      const resumeMode = getActiveResumeMode();
+      const requiresPerJobJdResume = resumeMode === 'easy_jd_resume';
       if (modalKey && modalKey !== currentApplicationModalKey) {
         currentApplicationModalKey = modalKey;
         resumeVerifiedForCurrentApplication = false;
@@ -328,7 +341,13 @@ async function runAgentLoop() {
         resumeStepSeenForCurrentApplication = false;
         resumeStepProbeAttempted = false;
         resumeStepBypassLoggedForCurrentApplication = false;
-        broadcastLog(`Detected new application modal: ${modalKey}. Resetting resume verification gate.`);
+        generatedResumeUploadAttemptedForCurrentApplication = false;
+        generatedResumeUploadedForCurrentApplication = false;
+        currentGeneratedResumeModalKey = '';
+        if (requiresPerJobJdResume) {
+          settings.generatedResume = null;
+        }
+        broadcastLog(`Detected new application modal: ${modalLabel || modalKey}. Resetting resume verification gate.`);
       } else if (!modalKey) {
         currentApplicationModalKey = '';
         resumeVerifiedForCurrentApplication = false;
@@ -337,6 +356,13 @@ async function runAgentLoop() {
         resumeStepSeenForCurrentApplication = false;
         resumeStepProbeAttempted = false;
         resumeStepBypassLoggedForCurrentApplication = false;
+        generatedResumeUploadAttemptedForCurrentApplication = false;
+        generatedResumeUploadedForCurrentApplication = false;
+        currentGeneratedResumeModalKey = '';
+      }
+
+      if (modalKey && requiresPerJobJdResume) {
+        await maybeGenerateResumeForCurrentApplication(snapshot, modalKey);
       }
 
     }
@@ -353,7 +379,7 @@ async function runAgentLoop() {
       const preferredResumeName = resumeHints.preferredResumeName;
 
       try {
-        const result = await sendMessageToAgentTab({
+        let result = await sendMessageToAgentTab({
           action: 'auto_select_resume',
           preferredResumeName: resumeHints.preferredResumeName,
           resumeKeyword: resumeHints.resumeKeyword,
@@ -361,6 +387,32 @@ async function runAgentLoop() {
           expectedTokens: resumeHints.intentTokens,
           disallowedTokens: resumeHints.disallowedTokens,
         });
+
+        if (
+          !result?.selectionCommitted &&
+          settings?.generatedResume?.resumeId &&
+          !generatedResumeUploadAttemptedForCurrentApplication
+        ) {
+          generatedResumeUploadAttemptedForCurrentApplication = true;
+          broadcastLog('No committed match found. Uploading generated resume into LinkedIn modal...');
+          const uploadResult = await uploadGeneratedResumeInActiveModal();
+          if (uploadResult?.uploaded) {
+            generatedResumeUploadedForCurrentApplication = true;
+            broadcastLog(`Generated resume uploaded (${uploadResult?.fileName || settings?.generatedResume?.fileName || 'resume'}). Re-running auto-select.`);
+            result = await sendMessageToAgentTab({
+              action: 'auto_select_resume',
+              preferredResumeName: resumeHints.preferredResumeName,
+              resumeKeyword: resumeHints.resumeKeyword,
+              titleTokens: resumeHints.titleTokens,
+              expectedTokens: resumeHints.intentTokens,
+              disallowedTokens: resumeHints.disallowedTokens,
+            });
+          } else {
+            const reason = uploadResult?.reason || 'upload_failed';
+            broadcastLog(`Generated resume upload failed: ${reason}`, true);
+          }
+        }
+
         resumeSelectionCommitted = Boolean(result?.selectionCommitted);
         const preferredResumeNameForCheck = settings?.selectedResume?.file_name || '';
         const selectedName = String(result?.selectedName || '');
@@ -961,6 +1013,26 @@ function extractCurrentApplicationModalKey(rawText = '') {
   return match[1].replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function extractJobKeyFromUrl(url = '') {
+  const rawUrl = String(url || '').trim();
+  if (!rawUrl) return '';
+  const idMatch = rawUrl.match(/\/jobs\/view\/(\d+)/i);
+  if (idMatch?.[1]) return `job-${idMatch[1]}`;
+  const clean = rawUrl.split('#')[0].split('?')[0];
+  return clean.slice(-120);
+}
+
+function normalizeResumeMode(mode = '') {
+  const normalized = String(mode || '').toLowerCase().trim();
+  if (normalized === 'easy_jd_resume' || normalized === 'easy-jd-resume') return 'easy_jd_resume';
+  if (normalized === 'easy') return 'easy';
+  return 'apply';
+}
+
+function getActiveResumeMode() {
+  return normalizeResumeMode(settings?.resumeMode || settings?.applyMode || '');
+}
+
 function normalizeResumeToken(value = '') {
   return String(value || '')
     .toLowerCase()
@@ -1365,6 +1437,199 @@ async function maybeCaptureAutoDebugSnapshot(
     broadcastLog(`Auto debug capture failed: ${error.message}`, true);
     return null;
   }
+}
+
+function sanitizeJobDescription(value = '') {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 12000);
+}
+
+function extractJobContextFromSnapshot(snapshot) {
+  const raw = String(snapshot?.rawText || '');
+  const lowered = raw.toLowerCase();
+  const aboutIndex = lowered.indexOf('about the job');
+  const rawDescription = aboutIndex >= 0 ? raw.slice(aboutIndex, aboutIndex + 5000) : raw.slice(0, 4000);
+  const modalCompany = String(currentApplicationModalKey || '').split('|')[0] || '';
+  const companyFromModal = extractAppliedCompany(raw) || modalCompany;
+
+  return {
+    jobTitle: String(settings?.searchQuery || '').trim(),
+    company: String(companyFromModal || '').trim(),
+    jobDescription: sanitizeJobDescription(rawDescription),
+    jobUrl: String(snapshot?.url || '').trim(),
+  };
+}
+
+async function fetchCurrentJobContext(snapshot) {
+  const fallback = extractJobContextFromSnapshot(snapshot);
+  const response = await sendMessageToAgentTab({ action: 'extract_current_job_context' }).catch(() => null);
+  const context = response?.context || {};
+  const modalCompany = String(currentApplicationModalKey || '').split('|')[0] || '';
+
+  const jobTitle = String(context.jobTitle || fallback.jobTitle || settings?.searchQuery || '').trim();
+  const company = String(context.company || fallback.company || modalCompany || '').trim();
+  const jobDescription = sanitizeJobDescription(context.jobDescription || fallback.jobDescription || '');
+  const jobUrl = String(context.jobUrl || fallback.jobUrl || '').trim();
+
+  return {
+    jobTitle,
+    company,
+    jobDescription,
+    jobUrl,
+  };
+}
+
+async function generateTailoredResumeForJobContext(jobContext) {
+  const headers = await getAuthHeaders();
+  if (!headers?.Authorization) {
+    return { error: 'not_authenticated' };
+  }
+
+  const searchQuery = String(settings?.searchQuery || jobContext?.jobTitle || '').trim();
+  const payload = {
+    searchQuery: searchQuery || String(jobContext?.jobTitle || '').trim(),
+    jobTitle: String(jobContext?.jobTitle || searchQuery || '').trim(),
+    company: String(jobContext?.company || '').trim(),
+    jobDescription: sanitizeJobDescription(jobContext?.jobDescription || ''),
+  };
+
+  const response = await fetch(`${API_URL}/resume/generate`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => '');
+    return {
+      error: `resume_generate_failed_${response.status}${details ? `:${details.slice(0, 120)}` : ''}`,
+    };
+  }
+
+  const data = await response.json().catch(() => ({}));
+  const resume = data?.data?.resume || null;
+  const generated = data?.data?.generated || null;
+  if (!resume || !generated?.resumeId) {
+    return { error: 'resume_generate_invalid_payload' };
+  }
+
+  return {
+    resume,
+    generated,
+  };
+}
+
+async function maybeGenerateResumeForCurrentApplication(snapshot, modalKey = '') {
+  if (getActiveResumeMode() !== 'easy_jd_resume') return false;
+  if (!modalKey) return false;
+  if (currentGeneratedResumeModalKey === modalKey) return true;
+
+  const jobContext = await fetchCurrentJobContext(snapshot);
+  const minimalContextMissing = !jobContext.jobTitle && !jobContext.company && !jobContext.jobDescription;
+  if (minimalContextMissing) {
+    broadcastLog('JD context not found for current job. Skipping tailored resume generation for this modal.', true);
+    currentGeneratedResumeModalKey = modalKey;
+    return false;
+  }
+
+  broadcastLog(
+    `Generating JD-tailored resume for ${jobContext.jobTitle || settings.searchQuery || 'current role'}${jobContext.company ? ` @ ${jobContext.company}` : ''}...`
+  );
+
+  const generatedResult = await generateTailoredResumeForJobContext(jobContext);
+  if (!generatedResult?.resume || !generatedResult?.generated?.resumeId) {
+    broadcastLog(
+      `JD resume generation failed for current job (${generatedResult?.error || 'unknown_error'}). Falling back to existing resume flow.`,
+      true,
+    );
+    currentGeneratedResumeModalKey = modalKey;
+    return false;
+  }
+
+  settings.selectedResume = generatedResult.resume;
+  settings.generatedResume = generatedResult.generated;
+  generatedResumeUploadAttemptedForCurrentApplication = false;
+  generatedResumeUploadedForCurrentApplication = false;
+  currentGeneratedResumeModalKey = modalKey;
+
+  const readyPayload = {
+    resumeId: String(generatedResult.generated.resumeId),
+    fileName: String(generatedResult.generated.fileName || generatedResult.resume.file_name || 'generated-resume.docx'),
+    jobTitle: String(jobContext.jobTitle || settings.searchQuery || 'Role'),
+    company: String(jobContext.company || 'Company'),
+    generatedAt: new Date().toISOString(),
+    source: 'per_job_jd',
+  };
+
+  broadcastLog(
+    `Generated tailored resume for "${readyPayload.jobTitle}"${readyPayload.company ? ` at ${readyPayload.company}` : ''}: ${readyPayload.fileName}`
+  );
+  broadcastLog(`JD_RESUME_READY::${JSON.stringify(readyPayload)}`);
+  return true;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+async function fetchGeneratedResumeUploadPayload() {
+  const generated = settings?.generatedResume || {};
+  const resumeId = String(generated.resumeId || '').trim();
+  if (!resumeId) return null;
+
+  const headers = await getAuthHeaders();
+  if (!headers?.Authorization) {
+    return { error: 'not_authenticated' };
+  }
+
+  const response = await fetch(`${API_URL}/resume/${encodeURIComponent(resumeId)}/file`, {
+    method: 'GET',
+    headers: {
+      Authorization: headers.Authorization,
+    },
+  });
+
+  if (!response.ok) {
+    return { error: `download_failed_${response.status}` };
+  }
+
+  const fileName = String(generated.fileName || generated.file_name || `resume-${resumeId}.docx`).trim();
+  const mimeType =
+    response.headers.get('content-type') ||
+    String(generated.contentType || generated.mimeType || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  const fileBase64 = arrayBufferToBase64(await response.arrayBuffer());
+
+  return {
+    fileName,
+    mimeType,
+    fileBase64,
+  };
+}
+
+async function uploadGeneratedResumeInActiveModal() {
+  const payload = await fetchGeneratedResumeUploadPayload();
+  if (!payload) {
+    return { uploaded: false, reason: 'generated_resume_not_available' };
+  }
+  if (payload.error) {
+    return { uploaded: false, reason: payload.error };
+  }
+
+  return sendMessageToAgentTab({
+    action: 'upload_generated_resume',
+    fileName: payload.fileName,
+    mimeType: payload.mimeType,
+    fileBase64: payload.fileBase64,
+  }).catch((error) => ({ uploaded: false, reason: error?.message || 'upload_message_failed' }));
 }
 
 function buildResumeRecoveryHints() {

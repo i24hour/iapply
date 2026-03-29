@@ -14,6 +14,8 @@ const startAutomationSchema = z.object({
   channel: z.string().min(1).max(100).optional().default('dashboard_chat'),
   commandText: z.string().min(1).max(500).optional(),
   searchQuery: z.string().min(1).max(300).optional(),
+  applyMode: z.enum(['easy', 'apply', 'easy_jd_resume']).optional().default('apply'),
+  resumeMode: z.enum(['easy', 'apply', 'easy_jd_resume']).optional(),
   provider: z.string().min(1).max(100).optional(),
   model: z.string().min(1).max(200).optional(),
   apiKey: z.string().min(1).max(500).optional(),
@@ -72,7 +74,7 @@ router.get('/status', authenticate, async (req: AuthRequest, res: Response, next
 // Start automation
 router.post('/start', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { count, source, channel, commandText, searchQuery, provider, model, apiKey, baseUrl } = startAutomationSchema.parse(req.body);
+    const { count, source, channel, commandText, searchQuery, applyMode, resumeMode, provider, model, apiKey, baseUrl } = startAutomationSchema.parse(req.body);
 
     const { data: activeCommand } = await supabase
       .from('agent_sessions')
@@ -108,6 +110,8 @@ router.post('/start', authenticate, async (req: AuthRequest, res: Response, next
       commandText: commandText || '',
       roles: preferences?.roles || [],
       locations: preferences?.locations || [],
+      applyMode,
+      resumeMode: resumeMode || applyMode,
       provider: configuredProvider,
       model: configuredModel,
       apiKey: configuredApiKey,

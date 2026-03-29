@@ -3,9 +3,12 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import axios from 'axios';
+import { z } from 'zod';
 import { createError } from '../middleware/error-handler.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
+import { generateResumeDocx } from '../lib/resume-docx-generator.js';
+import { loadResumeBinary, saveResumeBinary } from '../lib/resume-storage.js';
 
 const router = Router();
 
@@ -40,6 +43,13 @@ const upload = multer({
       cb(new Error('Only PDF and DOCX files are allowed'));
     }
   },
+});
+
+const generateResumeSchema = z.object({
+  searchQuery: z.string().trim().min(1).max(180).optional(),
+  jobTitle: z.string().trim().min(1).max(180).optional(),
+  company: z.string().trim().min(1).max(180).optional(),
+  jobDescription: z.string().trim().min(1).max(15000).optional(),
 });
 
 // Get all resumes for the user
@@ -85,6 +95,113 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response, next: Next
 
     res.json({ success: true, data: resume });
   } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/generate', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    if (!req.userId) {
+      throw createError('Not authenticated', 401);
+    }
+
+    const payload = generateResumeSchema.parse(req.body || {});
+
+    const [profileResult, latestResumeResult] = await Promise.all([
+      supabase
+        .from('profiles')
+        .select('*')
+        .eq('user_id', req.userId)
+        .maybeSingle(),
+      supabase
+        .from('resumes')
+        .select('*')
+        .eq('user_id', req.userId)
+        .order('uploaded_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
+    if (profileResult.error) {
+      console.error('Failed to load profile before resume generation:', profileResult.error);
+      throw createError('Failed to load profile for resume generation', 500);
+    }
+
+    if (latestResumeResult.error) {
+      console.error('Failed to load source resume before generation:', latestResumeResult.error);
+      throw createError('Failed to load source resume for generation', 500);
+    }
+
+    const parsedData =
+      latestResumeResult.data?.parsed_data && typeof latestResumeResult.data.parsed_data === 'object'
+        ? latestResumeResult.data.parsed_data
+        : null;
+
+    const generated = await generateResumeDocx({
+      userEmail: req.user?.email || '',
+      profile: profileResult.data || null,
+      latestParsedResume: parsedData,
+      searchQuery: payload.searchQuery,
+      jobTitle: payload.jobTitle,
+      company: payload.company,
+      jobDescription: payload.jobDescription,
+    });
+
+    const saved = await saveResumeBinary({
+      userId: req.userId,
+      fileName: generated.fileName,
+      buffer: generated.buffer,
+      contentType: generated.contentType,
+    });
+
+    const generatedMeta = {
+      generated: true,
+      generated_at: new Date().toISOString(),
+      source_resume_id: latestResumeResult.data?.id || null,
+      search_query: payload.searchQuery || null,
+      job_title: payload.jobTitle || null,
+      company: payload.company || null,
+    };
+
+    const { data: resumeRow, error: insertError } = await supabase
+      .from('resumes')
+      .insert({
+        user_id: req.userId,
+        file_name: saved.fileName,
+        file_url: saved.fileUrl,
+        parsed_data: {
+          ...(parsedData || {}),
+          _generated_meta: generatedMeta,
+        },
+      })
+      .select()
+      .single();
+
+    if (insertError || !resumeRow) {
+      console.error('Failed to persist generated resume row:', insertError);
+      throw createError('Failed to save generated resume metadata', 500);
+    }
+
+    res.status(201).json({
+      success: true,
+      data: {
+        resume: resumeRow,
+        generated: {
+          resumeId: resumeRow.id,
+          fileName: saved.fileName,
+          contentType: generated.contentType,
+          storage: saved.storage,
+          downloadPath: `/resume/${resumeRow.id}/file`,
+        },
+      },
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        success: false,
+        error: error.errors[0]?.message || 'Invalid payload',
+      });
+    }
     next(error);
   }
 });
@@ -146,5 +263,38 @@ router.post(
     }
   }
 );
+
+router.get('/:id/file', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    if (!req.userId) {
+      throw createError('Not authenticated', 401);
+    }
+
+    const { data: resume, error } = await supabase
+      .from('resumes')
+      .select('*')
+      .eq('id', req.params.id)
+      .eq('user_id', req.userId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Failed to load resume for binary download:', error);
+      throw createError('Failed to load resume file', 500);
+    }
+
+    if (!resume) {
+      throw createError('Resume not found', 404);
+    }
+
+    const fallbackName = path.basename(String(resume.file_name || 'resume.docx')).replace(/"/g, '');
+    const file = await loadResumeBinary(String(resume.file_url || ''), fallbackName);
+
+    res.setHeader('Content-Type', file.contentType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${fallbackName || file.fileName || 'resume.docx'}"`);
+    res.send(file.buffer);
+  } catch (error) {
+    next(error);
+  }
+});
 
 export default router;
