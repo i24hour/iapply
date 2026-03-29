@@ -330,7 +330,14 @@ async function runAgentLoop() {
     if (!isOutreach) {
       const modalLabel = extractCurrentApplicationModalKey(snapshot.rawText);
       const jobKey = extractJobKeyFromUrl(snapshot.url);
-      const modalKey = modalLabel ? `${modalLabel}|${jobKey || 'job-unknown'}` : '';
+      const modalVisible =
+        hasOpenEasyApplyModal(snapshot) ||
+        String(snapshot?.rawText || '').includes('RESUME_STEP_DETECTED');
+      const derivedModalKeyBase =
+        modalLabel || (modalVisible ? (jobKey ? `job:${jobKey}` : `step:${stepCount}`) : '');
+      const modalKey = derivedModalKeyBase
+        ? `${derivedModalKeyBase}|${jobKey || 'job-unknown'}`
+        : '';
       const resumeMode = getActiveResumeMode();
       const requiresPerJobJdResume = resumeMode === 'easy_jd_resume';
       if (modalKey && modalKey !== currentApplicationModalKey) {
@@ -347,7 +354,7 @@ async function runAgentLoop() {
         if (requiresPerJobJdResume) {
           settings.generatedResume = null;
         }
-        broadcastLog(`Detected new application modal: ${modalLabel || modalKey}. Resetting resume verification gate.`);
+        broadcastLog(`Detected new application modal: ${modalLabel || derivedModalKeyBase}. Resetting resume verification gate.`);
       } else if (!modalKey) {
         currentApplicationModalKey = '';
         resumeVerifiedForCurrentApplication = false;
@@ -359,6 +366,9 @@ async function runAgentLoop() {
         generatedResumeUploadAttemptedForCurrentApplication = false;
         generatedResumeUploadedForCurrentApplication = false;
         currentGeneratedResumeModalKey = '';
+        if (requiresPerJobJdResume) {
+          broadcastLog('JD mode: Easy Apply modal key not detected yet. Waiting for modal context...', true);
+        }
       }
 
       if (modalKey && requiresPerJobJdResume) {
