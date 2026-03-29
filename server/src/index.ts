@@ -27,7 +27,27 @@ import { startTelegramBot } from './lib/telegram.js';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: process.env.CLIENT_URL || '*', credentials: true }));
+const configuredClientOrigin = String(process.env.CLIENT_URL || '').trim();
+const extraAllowedOrigins = String(process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const allowedOrigins = new Set(
+  [configuredClientOrigin, ...extraAllowedOrigins].filter((origin) => origin && origin !== '*')
+);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (configuredClientOrigin === '*' || allowedOrigins.has(origin)) return callback(null, true);
+      if (/^chrome-extension:\/\//i.test(origin)) return callback(null, true);
+      if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return callback(null, true);
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    credentials: true,
+  })
+);
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 app.use('/uploads', express.static('uploads'));
