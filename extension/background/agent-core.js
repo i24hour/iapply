@@ -404,10 +404,22 @@ async function runAgentLoop() {
           disallowedTokens: resumeHints.disallowedTokens,
         });
 
+        const generatedResumeId = String(settings?.generatedResume?.resumeId || '').trim();
+        const generatedFileName = String(
+          settings?.generatedResume?.fileName ||
+          settings?.generatedResume?.file_name ||
+          settings?.selectedResume?.file_name ||
+          ''
+        ).trim();
+        const selectedNameAfterFirstPass = String(result?.selectedName || '');
+        const generatedAlreadySelected =
+          Boolean(generatedFileName) &&
+          resumeNameMatchesPreferred(selectedNameAfterFirstPass, generatedFileName);
+
         if (
-          !result?.selectionCommitted &&
-          settings?.generatedResume?.resumeId &&
-          !generatedResumeUploadAttemptedForCurrentApplication
+          generatedResumeId &&
+          !generatedResumeUploadAttemptedForCurrentApplication &&
+          (!result?.selectionCommitted || !generatedAlreadySelected)
         ) {
           generatedResumeUploadAttemptedForCurrentApplication = true;
           broadcastLog('No committed match found. Uploading generated resume into LinkedIn modal...');
@@ -1593,11 +1605,11 @@ async function maybeGenerateResumeForCurrentJobDetail(snapshot) {
   if (!isJobSearchSurface(snapshot)) return false;
   if (hasOpenEasyApplyModal(snapshot)) return false;
 
-  const jobKey = extractJobKeyFromUrl(snapshot?.url || '');
+  const jobContext = await fetchCurrentJobContext(snapshot);
+  const jobKey = extractJobKeyFromUrl(jobContext?.jobUrl || snapshot?.url || '');
   if (!jobKey) return false;
   if (currentGeneratedResumeJobKey === jobKey) return true;
 
-  const jobContext = await fetchCurrentJobContext(snapshot);
   const hasMeaningfulDescription = String(jobContext?.jobDescription || '').trim().length >= 120;
   const hasTitleOrCompany = Boolean(String(jobContext?.jobTitle || '').trim() || String(jobContext?.company || '').trim());
   if (!hasMeaningfulDescription && !hasTitleOrCompany) {
