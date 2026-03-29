@@ -717,91 +717,33 @@ export function ChatBot() {
   const showQuickActions = messages.length <= 1;
 
   return (
-    <div className="flex min-h-[28rem] max-h-[calc(100vh-8rem)] flex-col rounded-xl border bg-white h-[70vh] md:h-[600px] md:max-h-[calc(100vh-200px)]">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b bg-gradient-to-r from-primary-50 to-white rounded-t-xl">
-        <div
-          className={cn(
-            'w-10 h-10 rounded-full flex items-center justify-center',
-            automationStatus.isRunning ? 'bg-green-100' : 'bg-primary-100'
-          )}
-        >
-          <Sparkles
-            className={cn(
-              'h-5 w-5',
-              automationStatus.isRunning ? 'text-green-600' : 'text-primary-600'
-            )}
-          />
-        </div>
-        <div className="flex-1">
-          <h2 className="text-base sm:text-lg font-semibold">Job Assistant</h2>
-          <p className="text-xs sm:text-sm text-gray-500">
-            {automationStatus.isRunning ? (
-              <span className="text-green-600 flex items-center gap-1.5">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
-                </span>
-                Running — {automationStatus.jobsApplied} applied, {automationStatus.jobsFailed} failed
-              </span>
-            ) : (
-              'Tell me what to do — e.g. "apply 5 jobs"'
-            )}
-          </p>
-        </div>
-        <span
-          className={cn(
-            'hidden sm:inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium border',
-            isRecordingActive
-              ? 'bg-rose-50 text-rose-700 border-rose-200'
-              : 'bg-gray-50 text-gray-600 border-gray-200'
-          )}
-        >
-          <span
-            className={cn(
-              'inline-block h-2 w-2 rounded-full',
-              isRecordingActive ? 'bg-rose-500 animate-pulse' : 'bg-gray-400'
-            )}
-          />
-          {isRecordingActive ? 'Recording On' : 'Recording Off'}
-        </span>
-        {automationStatus.isRunning && (
-          <button
-            onClick={() => handleSend('stop')}
-            className="flex items-center gap-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-100 sm:px-3"
-          >
-            <Square className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Stop</span>
-          </button>
-        )}
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-4">
+    <div className="flex flex-col h-full max-h-screen bg-background">
+      {/* Messages Feed */}
+      <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 space-y-6">
         {recordingFrames.length > 0 && (
-          <div className="rounded-xl border border-primary-100 bg-primary-50 p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">
+          <div className="rounded-2xl border border-border bg-surface p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                 Live Recording Timeline
               </p>
-              <p className="text-xs text-primary-600">{recordingFrames.length} frames</p>
+              <p className="text-xs font-medium text-muted-foreground">{recordingFrames.length} frames</p>
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {recordingFrames.slice(0, 6).map((frame) => (
                 <a
                   key={frame.id}
                   href={frame.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="group overflow-hidden rounded-lg border border-primary-200 bg-white"
+                  className="group overflow-hidden rounded-xl border border-border bg-background"
                 >
                   <img
                     src={frame.url}
                     alt="Automation frame"
-                    className="h-20 w-full object-cover transition group-hover:scale-105"
+                    className="h-24 w-full object-cover transition duration-300 group-hover:scale-110"
                     loading="lazy"
                   />
-                  <div className="px-2 py-1 text-[10px] text-gray-500">
+                  <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground bg-surface border-t border-border">
                     {new Date(frame.createdAt).toLocaleTimeString([], {
                       hour: '2-digit',
                       minute: '2-digit',
@@ -815,21 +757,48 @@ export function ChatBot() {
         )}
 
         {sessionGeneratedResumes.length > 0 && (
-          <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                Generated In This Session
+          <div className="rounded-2xl border border-border bg-surface p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                Generated Resumes
               </p>
-              <p className="text-xs text-emerald-700">{sessionGeneratedResumes.length} resumes</p>
+              <p className="text-xs font-medium text-muted-foreground">{sessionGeneratedResumes.length} resumes</p>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-3">
               {sessionGeneratedResumes.slice(0, 5).map((item) => (
-                <div key={item.resumeId} className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
-                  <p className="text-sm font-medium text-gray-800">{item.jobTitle} • {item.company}</p>
-                  <p className="text-xs text-gray-600">{item.fileName}</p>
+                <div key={item.resumeId} className="rounded-xl border border-border bg-background px-4 py-3">
+                  <p className="text-sm font-bold text-foreground">{item.jobTitle} <span className="text-muted-foreground font-normal">• {item.company}</span></p>
+                  <p className="text-xs text-muted-foreground mt-1 font-mono">{item.fileName}</p>
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Suggestion chips when automation is running */}
+        {automationStatus.isRunning && (
+          <div className="flex gap-2 flex-wrap mb-4">
+            {[
+              { label: 'Status', cmd: 'status' },
+              { label: 'Pause', cmd: 'pause' },
+              { label: 'Record', cmd: 'start recording' },
+              { label: 'Stop Rec', cmd: 'stop recording' },
+              { label: 'Stop', cmd: 'stop', destructive: true },
+            ].map((chip) => (
+              <button
+                key={chip.cmd}
+                onClick={() => handleSend(chip.cmd)}
+                disabled={isProcessing}
+                className={cn(
+                  "text-xs font-medium px-4 py-2 rounded-full transition disabled:opacity-50",
+                  chip.destructive 
+                    ? "bg-destructive/10 text-destructive hover:bg-destructive/20" 
+                    : "bg-surface text-foreground hover:bg-border border border-border"
+                )}
+              >
+                {chip.label}
+              </button>
+            ))}
           </div>
         )}
 
@@ -839,17 +808,18 @@ export function ChatBot() {
 
         {/* Quick Actions — shown only at the start */}
         {showQuickActions && !isProcessing && (
-          <div className="pt-2">
-            <p className="text-xs text-gray-400 mb-3 font-medium uppercase tracking-wide">Quick actions</p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="pt-4 max-w-2xl mx-auto">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {quickActions.map((qa) => (
                 <button
                   key={qa.label}
                   onClick={() => handleSend(qa.command)}
-                  className="flex items-center gap-2 text-sm text-gray-700 bg-gray-50 hover:bg-primary-50 hover:text-primary-700 border border-gray-200 hover:border-primary-200 rounded-lg px-3 py-2.5 transition text-left"
+                  className="flex items-center gap-3 text-sm text-foreground bg-surface hover:bg-muted border border-border rounded-xl px-4 py-3.5 transition text-left"
                 >
-                  <qa.icon className="h-4 w-4 flex-shrink-0" />
-                  {qa.label}
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-background border border-border">
+                    <qa.icon className="h-4 w-4 text-primary" />
+                  </div>
+                  <span className="font-medium">{qa.label}</span>
                 </button>
               ))}
             </div>
@@ -857,102 +827,86 @@ export function ChatBot() {
         )}
 
         {isProcessing && (
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center flex-shrink-0">
-              <Bot className="h-4 w-4 text-primary-600" />
+          <div className="flex items-start gap-4">
+            <div className="w-8 h-8 rounded-full border border-border bg-surface flex items-center justify-center flex-shrink-0">
+              <Sparkles className="h-4 w-4 text-primary animate-pulse" />
             </div>
-            <div className="bg-gray-100 rounded-2xl rounded-tl-md px-4 py-3">
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
-                <span className="text-sm text-gray-500">Processing...</span>
+            <div className="px-1 py-1">
+              <div className="flex items-center gap-3">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <span className="text-sm font-medium text-muted-foreground">Thinking...</span>
               </div>
             </div>
           </div>
         )}
-        <div ref={messagesEndRef} />
+        <div ref={messagesEndRef} className="h-4" />
       </div>
 
-      {/* Suggestion chips when automation is running */}
-      {automationStatus.isRunning && (
-        <div className="px-4 sm:px-6 pb-2 flex gap-2 flex-wrap">
-          {[
-            { label: '📊 Status', cmd: 'status' },
-            { label: '⏸ Pause', cmd: 'pause' },
-            { label: '⏺ Record', cmd: 'start recording' },
-            { label: '⏹ Stop Rec', cmd: 'stop recording' },
-            { label: '🛑 Stop', cmd: 'stop' },
-          ].map((chip) => (
+      {/* Input Area */}
+      <div className="px-4 sm:px-8 py-4 bg-background">
+        <div className="max-w-4xl mx-auto relative">
+          <div className="mb-3 flex items-center gap-2 overflow-x-auto pb-1 scrollbar-hide">
             <button
-              key={chip.cmd}
-              onClick={() => handleSend(chip.cmd)}
+              onClick={() => setSelectedApplyMode('easy')}
               disabled={isProcessing}
-              className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-full transition disabled:opacity-50"
+              className={cn(
+                'text-xs font-medium rounded-full px-4 py-1.5 transition border whitespace-nowrap',
+                selectedApplyMode === 'easy'
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-surface text-muted-foreground border-border hover:bg-muted hover:text-foreground'
+              )}
             >
-              {chip.label}
+              Easy Apply
             </button>
-          ))}
-        </div>
-      )}
-
-      {/* Input */}
-      <div className="border-t px-4 sm:px-6 py-3 sm:py-4 bg-gray-50 rounded-b-xl">
-        <div className="mb-3 flex items-center gap-2">
-          <span className="text-xs text-gray-500 font-medium">Mode:</span>
-          <button
-            onClick={() => setSelectedApplyMode('easy')}
-            disabled={isProcessing}
-            className={cn(
-              'text-xs rounded-full px-3 py-1.5 transition border',
-              selectedApplyMode === 'easy'
-                ? 'bg-primary-600 text-white border-primary-600'
-                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
-            )}
-          >
-            Easy Apply (no resume)
-          </button>
-          <button
-            onClick={() => setSelectedApplyMode('easy_jd_resume')}
-            disabled={isProcessing}
-            className={cn(
-              'text-xs rounded-full px-3 py-1.5 transition border',
-              selectedApplyMode === 'easy_jd_resume'
-                ? 'bg-primary-600 text-white border-primary-600'
-                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
-            )}
-          >
-            Easy Apply with JD resume
-          </button>
-          <button
-            onClick={() => setSelectedApplyMode('apply')}
-            disabled={isProcessing}
-            className={cn(
-              'text-xs rounded-full px-3 py-1.5 transition border',
-              selectedApplyMode === 'apply'
-                ? 'bg-primary-600 text-white border-primary-600'
-                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
-            )}
-          >
-            Apply (resume required)
-          </button>
-        </div>
-        <div className="flex items-center gap-2 sm:gap-3">
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder='Try "Apply for product manager", "Easy apply 5 jobs", or "Show status"...'
-            className="flex-1 rounded-full border border-gray-200 bg-white px-4 py-3 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500 sm:px-5"
-            disabled={isProcessing}
-          />
-          <button
-            onClick={() => handleSend()}
-            disabled={!input.trim() || isProcessing}
-            className="w-11 h-11 rounded-full bg-primary-600 text-white flex items-center justify-center hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-          >
-            <Send className="h-5 w-5" />
-          </button>
+            <button
+              onClick={() => setSelectedApplyMode('easy_jd_resume')}
+              disabled={isProcessing}
+              className={cn(
+                'text-xs font-medium rounded-full px-4 py-1.5 transition border whitespace-nowrap',
+                selectedApplyMode === 'easy_jd_resume'
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-surface text-muted-foreground border-border hover:bg-muted hover:text-foreground'
+              )}
+            >
+              Easy Apply (AI Resume)
+            </button>
+            <button
+              onClick={() => setSelectedApplyMode('apply')}
+              disabled={isProcessing}
+              className={cn(
+                'text-xs font-medium rounded-full px-4 py-1.5 transition border whitespace-nowrap',
+                selectedApplyMode === 'apply'
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-surface text-muted-foreground border-border hover:bg-muted hover:text-foreground'
+              )}
+            >
+              Apply (Manual)
+            </button>
+          </div>
+          <div className="relative flex items-end gap-2 bg-surface border border-border rounded-3xl p-2 shadow-sm focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary transition-all">
+            <textarea
+              ref={inputRef as any}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder='Ask Codex to automate your applications...'
+              className="flex-1 max-h-32 min-h-[40px] resize-none bg-transparent px-4 py-2.5 text-sm text-foreground focus:outline-none scrollbar-hide"
+              disabled={isProcessing}
+              rows={1}
+            />
+            <button
+              onClick={() => handleSend()}
+              disabled={!input.trim() || isProcessing}
+              className="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:bg-primary/90 transition disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+            >
+              <Send className="h-4 w-4 ml-0.5" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -962,32 +916,31 @@ export function ChatBot() {
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === 'user';
 
-  return (
-    <div className={cn('flex items-start gap-3', isUser && 'flex-row-reverse')}>
-      <div
-        className={cn(
-          'w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0',
-          isUser ? 'bg-primary-600' : 'bg-primary-100'
-        )}
-      >
-        {isUser ? (
-          <User className="h-4 w-4 text-white" />
-        ) : (
-          <Bot className="h-4 w-4 text-primary-600" />
-        )}
+  if (isUser) {
+    return (
+      <div className="flex flex-row-reverse items-start gap-4">
+        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0 shadow-sm">
+          <User className="h-4 w-4 text-primary-foreground" />
+        </div>
+        <div className="max-w-[75%] bg-surface border border-border rounded-3xl rounded-tr-sm px-5 py-3.5 shadow-sm">
+          <div className="text-sm text-foreground whitespace-pre-line leading-relaxed">
+            {renderMarkdown(message.content)}
+          </div>
+        </div>
       </div>
-      <div
-        className={cn(
-          'max-w-[88%] rounded-2xl px-4 py-3 sm:max-w-[80%]',
-          isUser ? 'bg-primary-600 text-white rounded-tr-md' : 'bg-gray-100 text-gray-800 rounded-tl-md'
-        )}
-      >
-        <div className="text-sm whitespace-pre-line leading-relaxed">
+    );
+  }
+
+  // Codex AI aesthetic: Transparent background, clean text, distinctive icon
+  return (
+    <div className="flex items-start gap-4 max-w-4xl">
+      <div className="w-8 h-8 rounded-full border border-border bg-surface flex items-center justify-center flex-shrink-0 mt-1">
+        <Sparkles className="h-4 w-4 text-primary" />
+      </div>
+      <div className="flex-1 pt-1.5 pb-2">
+        <div className="text-sm text-foreground whitespace-pre-line leading-[1.7] prose prose-sm dark:prose-invert max-w-none">
           {renderMarkdown(message.content)}
         </div>
-        <p className={cn('text-xs mt-1.5', isUser ? 'text-primary-200' : 'text-gray-400')}>
-          {formatTime(message.timestamp)}
-        </p>
       </div>
     </div>
   );

@@ -29,11 +29,11 @@ export function QuickSetup({ hasResume, hasProfile }: QuickSetupProps) {
   if (allCompleted) return null;
 
   return (
-    <div className="rounded-xl border border-primary-200 bg-primary-50 p-4 sm:p-6">
-      <h2 className="text-lg font-semibold text-primary-900 mb-2">
+    <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 sm:p-5">
+      <h2 className="text-lg font-bold text-foreground mb-1">
         Complete Your Setup
       </h2>
-      <p className="text-primary-700 mb-4">
+      <p className="text-sm text-muted-foreground mb-4">
         Finish these steps to start automating your job applications.
       </p>
 
@@ -42,31 +42,31 @@ export function QuickSetup({ hasResume, hasProfile }: QuickSetupProps) {
           <Link
             key={step.name}
             href={step.href}
-            className={`flex flex-col items-start gap-3 rounded-lg p-4 transition sm:flex-row sm:items-center sm:justify-between ${
+            className={`group flex flex-col items-start gap-4 rounded-xl p-4 transition sm:flex-row sm:items-center sm:justify-between ${
               step.completed
-                ? 'bg-green-50 border border-green-200'
-                : 'bg-white border border-primary-200 hover:border-primary-400'
+                ? 'bg-green-500/10 border border-green-500/20'
+                : 'bg-surface border border-primary/20 hover:border-primary/50'
             }`}
           >
             <div className="flex items-start gap-4">
               <div
-                className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
                   step.completed
-                    ? 'bg-green-100 text-green-600'
-                    : 'bg-primary-100 text-primary-600'
+                    ? 'bg-green-500/20 text-green-600 dark:text-green-500'
+                    : 'bg-primary/20 text-primary'
                 }`}
               >
                 <step.icon className="h-5 w-5" />
               </div>
               <div>
-                <p className="font-medium text-gray-900">{step.name}</p>
-                <p className="text-sm text-gray-600">{step.description}</p>
+                <p className="font-bold text-foreground">{step.name}</p>
+                <p className="text-sm text-muted-foreground">{step.description}</p>
               </div>
             </div>
             {step.completed ? (
-              <span className="text-green-600 text-sm font-medium">Complete</span>
+              <span className="text-green-600 dark:text-green-500 text-sm font-bold bg-green-500/10 px-3 py-1 rounded-full">Complete</span>
             ) : (
-              <ArrowRight className="h-5 w-5 text-primary-600 self-end sm:self-auto" />
+              <ArrowRight className="h-5 w-5 text-primary self-end sm:self-auto transition group-hover:translate-x-1" />
             )}
           </Link>
         ))}

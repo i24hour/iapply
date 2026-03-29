@@ -8,21 +8,21 @@ interface StatsCardProps {
 }
 
 const colorClasses = {
-  green: 'bg-green-50 border-green-200',
-  blue: 'bg-blue-50 border-blue-200',
-  red: 'bg-red-50 border-red-200',
-  yellow: 'bg-yellow-50 border-yellow-200',
+  green: 'bg-green-500/10 border-green-500/20',
+  blue: 'bg-blue-500/10 border-blue-500/20',
+  red: 'bg-red-500/10 border-red-500/20',
+  yellow: 'bg-yellow-500/10 border-yellow-500/20',
 };
 
 export function StatsCard({ title, value, icon, color }: StatsCardProps) {
   return (
-    <div className={cn('rounded-xl border p-4 sm:p-6', colorClasses[color])}>
+    <div className={cn('rounded-xl border p-4 shadow-sm', colorClasses[color])}>
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-sm text-gray-600">{title}</p>
-          <p className="mt-1 text-2xl font-bold sm:text-3xl">{value}</p>
+          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{title}</p>
+          <p className="mt-1 text-2xl font-bold text-foreground">{value}</p>
         </div>
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm sm:h-12 sm:w-12">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-background/50 backdrop-blur-sm border border-border/50">
           {icon}
         </div>
       </div>
