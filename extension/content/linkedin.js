@@ -2415,6 +2415,52 @@ function extractCurrentJobContext() {
   };
 }
 
+async function expandCurrentJobDescription() {
+  const containerSelectors = [
+    '.jobs-description-content__text',
+    '.jobs-box__html-content',
+    '.jobs-description__container',
+    '.jobs-description',
+    '#job-details',
+  ];
+
+  let container = null;
+  for (const selector of containerSelectors) {
+    const found = document.querySelector(selector);
+    if (found && isElementVisible(found)) {
+      container = found;
+      break;
+    }
+  }
+
+  if (!container) return false;
+
+  const candidates = Array.from(container.querySelectorAll('button, a, [role="button"]')).filter((el) =>
+    isElementVisible(el)
+  );
+  const seeMore = candidates.find((el) => {
+    const text = normalizeText(el.innerText || el.textContent || el.getAttribute('aria-label') || '');
+    return (
+      text === 'see more' ||
+      text.includes('show more') ||
+      text.includes('read more') ||
+      text.includes('more')
+    );
+  });
+
+  if (!seeMore) return false;
+
+  await forceClickElement(seeMore);
+  await sleep(220);
+  return true;
+}
+
+async function extractCurrentJobContextEnriched() {
+  await expandCurrentJobDescription().catch(() => {});
+  await sleep(120);
+  return extractCurrentJobContext();
+}
+
 function buildDOMSnapshot() {
   const interactiveSelectors = [
     'button', 'a[href]', 'input', 'select', 'textarea',
@@ -2939,6 +2985,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'extract_current_job_context') {
     sendResponse({ context: extractCurrentJobContext() });
+    return true;
+  }
+
+  if (message.action === 'extract_current_job_context_enriched') {
+    extractCurrentJobContextEnriched().then((context) => {
+      sendResponse({ context });
+    });
     return true;
   }
 

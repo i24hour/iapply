@@ -37,6 +37,7 @@ let resumeStepBypassLoggedForCurrentApplication = false;
 let generatedResumeUploadAttemptedForCurrentApplication = false;
 let generatedResumeUploadedForCurrentApplication = false;
 let currentGeneratedResumeModalKey = '';
+let currentGeneratedResumeJobKey = '';
 const MIN_MAX_STEPS = 400;
 const MAX_STEPS_PER_APPLICATION = 180;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
@@ -153,6 +154,7 @@ export async function startAgent(config) {
   generatedResumeUploadAttemptedForCurrentApplication = false;
   generatedResumeUploadedForCurrentApplication = false;
   currentGeneratedResumeModalKey = '';
+  currentGeneratedResumeJobKey = '';
 
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
   if (settings.selectedResume) {
@@ -236,6 +238,7 @@ export function stopAgent() {
   generatedResumeUploadAttemptedForCurrentApplication = false;
   generatedResumeUploadedForCurrentApplication = false;
   currentGeneratedResumeModalKey = '';
+  currentGeneratedResumeJobKey = '';
   broadcastLog('Stopped by user.');
   updateTaskStatus('stopped');
   completeAutomationSession();
@@ -328,6 +331,8 @@ async function runAgentLoop() {
     }
 
     if (!isOutreach) {
+      await maybeGenerateResumeForCurrentJobDetail(snapshot);
+
       const modalLabel = extractCurrentApplicationModalKey(snapshot.rawText);
       const jobKey = extractJobKeyFromUrl(snapshot.url);
       const modalVisible =
@@ -1474,7 +1479,9 @@ function extractJobContextFromSnapshot(snapshot) {
 
 async function fetchCurrentJobContext(snapshot) {
   const fallback = extractJobContextFromSnapshot(snapshot);
-  const response = await sendMessageToAgentTab({ action: 'extract_current_job_context' }).catch(() => null);
+  const response =
+    await sendMessageToAgentTab({ action: 'extract_current_job_context_enriched' }).catch(() => null) ||
+    await sendMessageToAgentTab({ action: 'extract_current_job_context' }).catch(() => null);
   const context = response?.context || {};
   const modalCompany = String(currentApplicationModalKey || '').split('|')[0] || '';
 
@@ -1575,6 +1582,59 @@ async function maybeGenerateResumeForCurrentApplication(snapshot, modalKey = '')
 
   broadcastLog(
     `Generated tailored resume for "${readyPayload.jobTitle}"${readyPayload.company ? ` at ${readyPayload.company}` : ''}: ${readyPayload.fileName}`
+  );
+  broadcastLog(`JD_RESUME_READY::${JSON.stringify(readyPayload)}`);
+  return true;
+}
+
+async function maybeGenerateResumeForCurrentJobDetail(snapshot) {
+  if (getActiveResumeMode() !== 'easy_jd_resume') return false;
+  if (!isJobSearchSurface(snapshot)) return false;
+  if (hasOpenEasyApplyModal(snapshot)) return false;
+
+  const jobKey = extractJobKeyFromUrl(snapshot?.url || '');
+  if (!jobKey) return false;
+  if (currentGeneratedResumeJobKey === jobKey) return true;
+
+  const jobContext = await fetchCurrentJobContext(snapshot);
+  const hasMeaningfulDescription = String(jobContext?.jobDescription || '').trim().length >= 120;
+  const hasTitleOrCompany = Boolean(String(jobContext?.jobTitle || '').trim() || String(jobContext?.company || '').trim());
+  if (!hasMeaningfulDescription && !hasTitleOrCompany) {
+    broadcastLog(`JD mode: job detail context missing for ${jobKey}. Skipping generation this step.`, true);
+    return false;
+  }
+
+  broadcastLog(
+    `JD mode: generating resume from job detail for ${jobContext.jobTitle || settings.searchQuery || 'current role'}${jobContext.company ? ` @ ${jobContext.company}` : ''}.`
+  );
+
+  const generatedResult = await generateTailoredResumeForJobContext(jobContext);
+  if (!generatedResult?.resume || !generatedResult?.generated?.resumeId) {
+    broadcastLog(
+      `JD mode: job-detail generation failed (${generatedResult?.error || 'unknown_error'}). Will retry on next valid job detail.`,
+      true
+    );
+    return false;
+  }
+
+  settings.selectedResume = generatedResult.resume;
+  settings.generatedResume = generatedResult.generated;
+  generatedResumeUploadAttemptedForCurrentApplication = false;
+  generatedResumeUploadedForCurrentApplication = false;
+  currentGeneratedResumeJobKey = jobKey;
+  currentGeneratedResumeModalKey = '';
+
+  const readyPayload = {
+    resumeId: String(generatedResult.generated.resumeId),
+    fileName: String(generatedResult.generated.fileName || generatedResult.resume.file_name || 'generated-resume.docx'),
+    jobTitle: String(jobContext.jobTitle || settings.searchQuery || 'Role'),
+    company: String(jobContext.company || 'Company'),
+    generatedAt: new Date().toISOString(),
+    source: 'job_detail_pre_easy_apply',
+  };
+
+  broadcastLog(
+    `JD mode: generated resume for "${readyPayload.jobTitle}"${readyPayload.company ? ` at ${readyPayload.company}` : ''}: ${readyPayload.fileName}`
   );
   broadcastLog(`JD_RESUME_READY::${JSON.stringify(readyPayload)}`);
   return true;
