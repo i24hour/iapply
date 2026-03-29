@@ -780,6 +780,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         resumeDisallowedTokens: resumeConfig.resumeDisallowedTokens || [],
         resumeSelectionConfident: Boolean(resumeConfig.resumeSelectionConfident),
       });
+      emitAgentLog(`Direct run config resolved: resumeMode=${resumeMode}`).catch(() => {});
       startLiveRecording();
       sendResponse({ success: true, taskId });
     })().catch((error) => {
@@ -980,6 +981,7 @@ async function pollFrontendCommands() {
     config.resumeIntentTokens = resumeConfig.resumeIntentTokens || [];
     config.resumeDisallowedTokens = resumeConfig.resumeDisallowedTokens || [];
     config.resumeSelectionConfident = Boolean(resumeConfig.resumeSelectionConfident);
+    emitAgentLog(`Frontend run config resolved: resumeMode=${config.resumeMode}`).catch(() => {});
 
     startAgent(config);
     startLiveRecording();

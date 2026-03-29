@@ -157,6 +157,7 @@ export async function startAgent(config) {
   currentGeneratedResumeJobKey = '';
 
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
+  broadcastLog(`Active resume mode: ${getActiveResumeMode()}`);
   if (settings.selectedResume) {
     broadcastLog(`Selected resume for "${settings.searchQuery}": ${settings.selectedResume.file_name}`);
   } else {
