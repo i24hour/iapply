@@ -381,13 +381,21 @@ export function ChatBot() {
         case 'start': {
           const applyMode: ApplyMode = command.applyMode || 'apply';
 
-          if ((applyMode === 'apply' || applyMode === 'easy_jd_resume') && !resume) {
+          if (applyMode === 'apply' && !resume) {
             addMessage({
               role: 'bot',
               content:
                 '⚠️ Please upload your resume first before I can start applying.\n\nGo to the **Resume** page from the sidebar to upload it.',
             });
             break;
+          }
+
+          if (applyMode === 'easy_jd_resume' && !resume) {
+            addMessage({
+              role: 'bot',
+              content:
+                'ℹ️ Base resume not found. JD-mode run will continue using profile + job context. Better results ke liye Resume page me ek base resume upload karna recommended hai.',
+            });
           }
 
           if (automationStatus.isRunning) {
