@@ -38,6 +38,9 @@ let generatedResumeUploadAttemptedForCurrentApplication = false;
 let generatedResumeUploadedForCurrentApplication = false;
 let currentGeneratedResumeModalKey = '';
 let currentGeneratedResumeJobKey = '';
+let easyApplyFilterEnforced = false;
+let lastNavigationSignature = '';
+let lastNavigationStep = 0;
 const MIN_MAX_STEPS = 400;
 const MAX_STEPS_PER_APPLICATION = 180;
 const MAX_REPEATS = 3; // If same action repeats this many times, skip it
@@ -155,6 +158,9 @@ export async function startAgent(config) {
   generatedResumeUploadedForCurrentApplication = false;
   currentGeneratedResumeModalKey = '';
   currentGeneratedResumeJobKey = '';
+  easyApplyFilterEnforced = false;
+  lastNavigationSignature = '';
+  lastNavigationStep = 0;
 
   broadcastLog(`Starting with config: ${settings.provider} / ${settings.model}`);
   broadcastLog(`Active resume mode: ${getActiveResumeMode()}`);
@@ -192,6 +198,7 @@ export async function startAgent(config) {
     let searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(settings.searchQuery)}&f_AL=true`;
     if (settings.jobPostedTime) searchUrl += `&f_TPR=${settings.jobPostedTime}`;
     preferredJobsSearchUrl = searchUrl;
+    easyApplyFilterEnforced = true;
     broadcastLog(`Navigating to LinkedIn Jobs search (posted: ${timeLabel})...`);
     const tabs = await chrome.tabs.query({ url: 'https://www.linkedin.com/*' });
     let tab;
@@ -240,6 +247,9 @@ export function stopAgent() {
   generatedResumeUploadedForCurrentApplication = false;
   currentGeneratedResumeModalKey = '';
   currentGeneratedResumeJobKey = '';
+  easyApplyFilterEnforced = false;
+  lastNavigationSignature = '';
+  lastNavigationStep = 0;
   broadcastLog('Stopped by user.');
   updateTaskStatus('stopped');
   completeAutomationSession();
@@ -698,7 +708,28 @@ async function runAgentLoop() {
 
     // 4. Execute Action
     if (decision.action === 'navigate') {
-      const targetUrl = decision.value || '';
+      const targetUrl = String(decision.value || '').trim();
+      if (!targetUrl) {
+        broadcastLog('Skipping navigation because target URL is empty.', true);
+        setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
+        return;
+      }
+      const targetSignature = buildNavigationSignature(targetUrl);
+      const currentSignature = buildNavigationSignature(snapshot?.url || '');
+      if (targetSignature && currentSignature && targetSignature === currentSignature) {
+        broadcastLog('Skipping navigation: already on the target jobs page variant.');
+        setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
+        return;
+      }
+      if (
+        targetSignature &&
+        targetSignature === lastNavigationSignature &&
+        stepCount - lastNavigationStep <= 2
+      ) {
+        broadcastLog('Skipping repeated navigation loop to the same URL.');
+        setTimeout(runAgentLoop, RECOVERY_LOOP_DELAY_MS);
+        return;
+      }
       // Guard: in post outreach mode, never navigate to the jobs section
       if (settings.mode === 'post_outreach' && /linkedin\.com\/jobs[\/?]/i.test(targetUrl)) {
         broadcastLog(`[Post Outreach] Blocked navigation to jobs section: ${targetUrl}`, true);
@@ -706,6 +737,8 @@ async function runAgentLoop() {
         return;
       }
       broadcastLog(`Navigating to: ${targetUrl}`);
+      lastNavigationSignature = targetSignature;
+      lastNavigationStep = stepCount;
       let tab = null;
       if (agentTabId) {
         try {
@@ -1135,9 +1168,37 @@ function isJobSearchSurface(snapshot) {
   return /linkedin\.com\/jobs\//.test(url);
 }
 
+function isJobsSearchFeedUrl(url = '') {
+  return String(url || '').toLowerCase().includes('/jobs/search/');
+}
+
+function isJobsDetailUrl(url = '') {
+  const lowered = String(url || '').toLowerCase();
+  return lowered.includes('/jobs/view/');
+}
+
 function hasEasyApplyFilterInUrl(url = '') {
   const lowered = String(url || '').toLowerCase();
   return lowered.includes('f_al=true') || lowered.includes('f_al=1');
+}
+
+function buildNavigationSignature(url = '') {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const params = new URLSearchParams(parsed.search || '');
+    // Ignore volatile params that frequently churn during sidebar selection.
+    ['currentJobId', 'trackingId', 'trk', 'refId', 'position', 'pageNum', 'start'].forEach((key) => {
+      params.delete(key);
+    });
+    const sorted = [...params.entries()].sort(([a], [b]) => a.localeCompare(b));
+    const query = new URLSearchParams(sorted).toString();
+    const base = `${parsed.origin.toLowerCase()}${parsed.pathname.toLowerCase()}`;
+    return query ? `${base}?${query}` : base;
+  } catch (_error) {
+    return raw.split('#')[0].toLowerCase();
+  }
 }
 
 function hasOpenEasyApplyModal(snapshot) {
@@ -1275,8 +1336,20 @@ function chooseDeterministicJobsSearchDecision(snapshot) {
   if (!snapshot || hasOpenEasyApplyModal(snapshot)) return null;
   const url = String(snapshot.url || '');
   const loweredUrl = url.toLowerCase();
+  const isSearchFeed = isJobsSearchFeedUrl(loweredUrl);
+  const isDetailPage = isJobsDetailUrl(loweredUrl);
 
-  if (isJobSearchSurface(snapshot) && !hasEasyApplyFilterInUrl(loweredUrl) && preferredJobsSearchUrl) {
+  if (isSearchFeed && hasEasyApplyFilterInUrl(loweredUrl)) {
+    easyApplyFilterEnforced = true;
+  }
+
+  if (
+    isSearchFeed &&
+    !hasEasyApplyFilterInUrl(loweredUrl) &&
+    preferredJobsSearchUrl &&
+    !easyApplyFilterEnforced
+  ) {
+    easyApplyFilterEnforced = true;
     return {
       action: 'navigate',
       value: preferredJobsSearchUrl,
@@ -1299,7 +1372,6 @@ function chooseDeterministicJobsSearchDecision(snapshot) {
     }
   }
 
-  const isSearchFeed = loweredUrl.includes('/jobs/search/');
   if (isJobSearchSurface(snapshot) && isSearchFeed) {
     return {
       action: 'open_easy_apply_listing',
@@ -1310,7 +1382,7 @@ function chooseDeterministicJobsSearchDecision(snapshot) {
   }
 
   // Find the next unapplied Easy Apply listing in the sidebar
-  const listingCandidate = findEasyApplyListingCandidate(snapshot);
+  const listingCandidate = isSearchFeed ? findEasyApplyListingCandidate(snapshot) : null;
   if (listingCandidate?.id) {
     return {
       action: 'click',
@@ -1327,13 +1399,21 @@ function chooseDeterministicJobsSearchDecision(snapshot) {
     raw.includes('application status') ||
     raw.includes('application submitted') ||
     raw.includes('you applied');
-  const notSearchFeed = !isSearchFeed;
-
-  if ((looksLikeSingleAppliedDetail || notSearchFeed) && preferredJobsSearchUrl) {
+  const shouldReturnToSearch =
+    looksLikeSingleAppliedDetail ||
+    (isJobSearchSurface(snapshot) && !isSearchFeed && !isDetailPage);
+  if (shouldReturnToSearch && preferredJobsSearchUrl) {
     return {
       action: 'navigate',
       value: preferredJobsSearchUrl,
       reasoning: 'Deterministic mode: returning to jobs search results to continue applying.',
+    };
+  }
+
+  if (isDetailPage && !alreadyApplied) {
+    return {
+      action: 'wait',
+      reasoning: 'Deterministic mode: staying on current job detail and waiting for Easy Apply controls to settle.',
     };
   }
 

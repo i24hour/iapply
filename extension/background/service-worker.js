@@ -23,6 +23,46 @@ let lastCapturedAgentFrameAt = 0;
 let captureInFlightPromise = null;
 let captureInFlightStartedAt = 0;
 let lastCaptureFailureLogAt = 0;
+let startPipelineToken = 0;
+let lastStopAtMs = 0;
+
+function beginStartPipeline({ explicit = false } = {}) {
+  startPipelineToken += 1;
+  if (explicit) {
+    // User explicitly asked to start again; clear stale-stop guard.
+    lastStopAtMs = 0;
+  }
+  return startPipelineToken;
+}
+
+function isStartPipelineCanceled(token) {
+  return token !== startPipelineToken;
+}
+
+function cancelStartPipelines() {
+  startPipelineToken += 1;
+  lastStopAtMs = Date.now();
+}
+
+function isSessionStaleAfterStop(startedAtRaw) {
+  if (!lastStopAtMs) return false;
+  const startedAtMs = Date.parse(String(startedAtRaw || ''));
+  if (!Number.isFinite(startedAtMs)) return false;
+  return startedAtMs <= lastStopAtMs;
+}
+
+async function completeFrontendSessionIfPresent(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) return;
+  try {
+    await fetch(`${API_URL}/extension/commands/${encodeURIComponent(id)}/complete`, {
+      method: 'POST',
+      headers: await getAuthHeaders(),
+    });
+  } catch {
+    // Best effort cleanup only.
+  }
+}
 
 function appendAgentLog(message, isError = false) {
   agentLogs.push({ message, isError, timestamp: Date.now() });
@@ -732,6 +772,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     agentLogs = [];
     appendAgentLog('Agent start requested.');
     (async () => {
+      const startToken = beginStartPipeline({ explicit: true });
       let taskId = message.config?.taskId || null;
 
       if (!taskId) {
@@ -747,6 +788,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         taskId = taskRun?.id || null;
       }
+      if (isStartPipelineCanceled(startToken)) {
+        emitAgentLog('Start request canceled before launch (stop/new command received).', true).catch(() => {});
+        sendResponse({ success: false, canceled: true });
+        return;
+      }
 
       const searchQuery = message.config?.searchQuery || '';
       const resumeMode = normalizeResumeMode(message.config?.resumeMode || message.config?.applyMode);
@@ -756,6 +802,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         source: message.config?.source || 'extension',
         resumeMode,
       });
+      if (isStartPipelineCanceled(startToken)) {
+        emitAgentLog('Start request canceled during config resolution (stop/new command received).', true).catch(() => {});
+        sendResponse({ success: false, canceled: true });
+        return;
+      }
 
       if (resumeConfig.generatedResume?.resumeId && resumeConfig.selectedResume?.file_name) {
         emitAgentLog(`Generated tailored resume for "${searchQuery}": ${resumeConfig.selectedResume.file_name}`).catch(() => {});
@@ -789,6 +840,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === 'stop_agent') {
     appendAgentLog('Agent stop requested.');
+    cancelStartPipelines();
     stopAgent();
     stopLiveRecording();
     sendResponse({ success: true });
@@ -935,6 +987,13 @@ async function pollFrontendCommands() {
     if (!data.success || !data.data) return;
 
     const cmd = data.data;
+    if (isSessionStaleAfterStop(cmd?.started_at)) {
+      emitAgentLog(`Ignoring stale frontend session after stop: ${cmd?.id || 'unknown'}.`).catch(() => {});
+      await completeFrontendSessionIfPresent(cmd?.id);
+      return;
+    }
+
+    const startToken = beginStartPipeline();
     const settings = await new Promise((resolve) => {
       chrome.storage.local.get(['llm_provider', 'llm_api_key', 'llm_model', 'llm_base_url'], resolve);
     });
@@ -965,6 +1024,10 @@ async function pollFrontendCommands() {
       source: 'frontend',
       resumeMode: config.resumeMode,
     });
+    if (isStartPipelineCanceled(startToken)) {
+      emitAgentLog('Frontend start canceled before launch (stop/new command received).', true).catch(() => {});
+      return;
+    }
     if (resumeConfig.generatedResume?.resumeId && resumeConfig.selectedResume?.file_name) {
       config.selectedResume = resumeConfig.selectedResume;
       config.generatedResume = resumeConfig.generatedResume;
@@ -1003,6 +1066,7 @@ async function pollTelegramBridge() {
     const cmd = data.command;
 
     if (cmd.type === 'start_agent') {
+      const startToken = beginStartPipeline();
       const settings = await new Promise((resolve) => {
         chrome.storage.local.get(['llm_provider', 'llm_api_key', 'llm_model', 'llm_base_url'], resolve);
       });
@@ -1027,6 +1091,14 @@ async function pollTelegramBridge() {
         source: 'telegram',
         resumeMode: config.resumeMode,
       });
+      if (isStartPipelineCanceled(startToken)) {
+        emitAgentLog('Telegram start canceled before launch (stop/new command received).', true).catch(() => {});
+        fetch(`${API_URL}/agent/complete/${cmd.id}`, {
+          method: 'POST',
+          headers: await getAuthHeaders(),
+        }).catch(() => {});
+        return;
+      }
       if (resumeConfig.generatedResume?.resumeId && resumeConfig.selectedResume?.file_name) {
         config.selectedResume = resumeConfig.selectedResume;
         config.generatedResume = resumeConfig.generatedResume;
@@ -1053,6 +1125,7 @@ async function pollTelegramBridge() {
         body: JSON.stringify({ status: 'running' }),
       }).catch(() => {});
     } else if (cmd.type === 'stop_agent') {
+      cancelStartPipelines();
       stopAgent();
       stopLiveRecording();
 
