@@ -190,6 +190,7 @@ router.post('/generate', authenticate, async (req: AuthRequest, res: Response, n
           resumeId: resumeRow.id,
           fileName: saved.fileName,
           contentType: generated.contentType,
+          fileBase64: generated.buffer.toString('base64'),
           storage: saved.storage,
           downloadPath: `/resume/${resumeRow.id}/file`,
         },

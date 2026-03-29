@@ -1605,11 +1605,18 @@ async function generateTailoredResumeForJobContext(jobContext) {
     jobDescription: sanitizeJobDescription(jobContext?.jobDescription || ''),
   };
 
-  const response = await fetch(`${API_URL}/resume/generate`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-  });
+  let response;
+  try {
+    response = await fetch(`${API_URL}/resume/generate`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    return {
+      error: `resume_generate_fetch_failed:${error?.message || 'network_error'}`,
+    };
+  }
 
   if (!response.ok) {
     const details = await response.text().catch(() => '');
@@ -1747,6 +1754,20 @@ function arrayBufferToBase64(buffer) {
 async function fetchGeneratedResumeUploadPayload() {
   const generated = settings?.generatedResume || {};
   const resumeId = String(generated.resumeId || '').trim();
+  const inlineBase64 = String(generated.fileBase64 || generated.inlineBase64 || '').trim();
+  const inlineFileName = String(generated.fileName || generated.file_name || `generated-resume-${Date.now()}.docx`).trim();
+  const inlineMimeType = String(
+    generated.contentType ||
+      generated.mimeType ||
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  );
+  if (inlineBase64) {
+    return {
+      fileName: inlineFileName,
+      mimeType: inlineMimeType,
+      fileBase64: inlineBase64,
+    };
+  }
   if (!resumeId) return null;
 
   const headers = await getAuthHeaders();
@@ -1754,12 +1775,17 @@ async function fetchGeneratedResumeUploadPayload() {
     return { error: 'not_authenticated' };
   }
 
-  const response = await fetch(`${API_URL}/resume/${encodeURIComponent(resumeId)}/file`, {
-    method: 'GET',
-    headers: {
-      Authorization: headers.Authorization,
-    },
-  });
+  let response;
+  try {
+    response = await fetch(`${API_URL}/resume/${encodeURIComponent(resumeId)}/file`, {
+      method: 'GET',
+      headers: {
+        Authorization: headers.Authorization,
+      },
+    });
+  } catch (error) {
+    return { error: `download_fetch_failed:${error?.message || 'network_error'}` };
+  }
 
   if (!response.ok) {
     return { error: `download_failed_${response.status}` };
