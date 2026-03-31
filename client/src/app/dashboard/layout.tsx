@@ -185,17 +185,11 @@ export default function DashboardLayout({
         </div>
       </header>
 
-      {/* Main Container */}
-      <main className="flex w-full max-w-[1050px] min-h-screen pt-14 xl:pt-0">
-        {/* Center Feed */}
-        <div className="flex-1 max-w-[600px] border-r border-border min-h-screen">
+      {/* Main Content – full width chat feed */}
+      <main className="flex flex-1 w-full min-h-screen pt-14 xl:pt-0">
+        <div className="flex flex-col flex-1 min-h-screen min-w-0">
           {children}
         </div>
-
-        {/* Right Sidebar */}
-        <aside className="hidden lg:block w-[350px] shrink-0 p-6 sticky top-0 h-screen overflow-y-auto">
-          <RightSidebar />
-        </aside>
       </main>
     </div>
   );

@@ -55,12 +55,12 @@ export default function DashboardPage() {
   }, [automationStatus.isRunning]);
 
   return (
-    <div className="flex flex-col h-full bg-background relative max-w-full">
-      <div className="sticky top-0 z-10 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-md hidden xl:block">
-        <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-blue-400">Codex Assistant</h1>
+    <div className="flex flex-col h-screen overflow-hidden bg-background">
+      <div className="sticky top-0 z-10 border-b border-border bg-background/90 px-6 py-3 backdrop-blur-md flex items-center gap-3">
+        <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+        <h1 className="text-sm font-bold text-foreground tracking-wide uppercase">Codex / Job Assistant</h1>
       </div>
-      
-      <div className="flex-1 w-full max-w-full overflow-hidden">
+      <div className="flex-1 overflow-hidden">
         <ChatBot />
       </div>
     </div>

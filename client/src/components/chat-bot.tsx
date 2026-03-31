@@ -714,7 +714,101 @@ export function ChatBot() {
     }
   };
 
-  const showQuickActions = messages.length <= 1;
+  const isHeroMode = messages.length === 0 && !isProcessing;
+
+  // ---- HERO STATE (no messages yet) ----
+  if (isHeroMode) {
+    return (
+      <div className="flex flex-col h-full bg-background">
+        <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16 pt-8">
+          <div className="w-full max-w-2xl space-y-8">
+            {/* Hero Title */}
+            <div className="text-center space-y-2">
+              <div className="flex justify-center mb-4">
+                <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center border border-primary/20">
+                  <Sparkles className="h-7 w-7 text-primary" />
+                </div>
+              </div>
+              <h1 className="text-3xl font-bold text-foreground tracking-tight">
+                What should we apply for next?
+              </h1>
+              <p className="text-muted-foreground text-base">
+                Your AI job application agent — powered by Codex
+              </p>
+            </div>
+
+            {/* Mode Pills */}
+            <div className="flex items-center justify-center gap-2 flex-wrap">
+              {([
+                { label: 'Easy Apply', value: 'easy' },
+                { label: 'Easy Apply (AI Resume)', value: 'easy_jd_resume' },
+                { label: 'Apply (Manual)', value: 'apply' },
+              ] as const).map((m) => (
+                <button
+                  key={m.value}
+                  onClick={() => setSelectedApplyMode(m.value)}
+                  className={cn(
+                    'text-xs font-medium rounded-full px-4 py-1.5 transition border',
+                    selectedApplyMode === m.value
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-surface text-muted-foreground border-border hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Big hero input */}
+            <div className="relative flex items-end gap-3 bg-surface border border-border rounded-2xl p-3 shadow-md focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary transition-all">
+              <textarea
+                ref={inputRef as any}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder={`Try "Easy apply 5 jobs", "Status", or "Help"...`}
+                className="flex-1 min-h-[52px] max-h-40 resize-none bg-transparent px-3 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus:outline-none scrollbar-hide leading-relaxed"
+                disabled={isProcessing}
+                rows={1}
+                autoFocus
+              />
+              <button
+                onClick={() => handleSend()}
+                disabled={!input.trim() || isProcessing}
+                className="w-11 h-11 shrink-0 rounded-xl bg-primary text-primary-foreground flex items-center justify-center hover:bg-primary/90 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Send className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Quick action chips */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {quickActions.map((qa) => (
+                <button
+                  key={qa.label}
+                  onClick={() => handleSend(qa.command)}
+                  className="flex items-center gap-3 text-sm text-foreground bg-surface hover:bg-muted border border-border rounded-xl px-4 py-3 transition text-left"
+                >
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-background border border-border shrink-0">
+                    <qa.icon className="h-4 w-4 text-primary" />
+                  </div>
+                  <span className="font-medium text-sm">{qa.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- EXPANDED CHAT STATE ----
+  const showQuickActions = false;
 
   return (
     <div className="flex flex-col h-full max-h-screen bg-background">
