@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getUploadsRoot } from './uploads.js';
 
 type UploadInput = {
   userId: string;
@@ -15,7 +16,7 @@ type DownloadResult = {
   fileName: string;
 };
 
-const LOCAL_RESUME_DIR = path.join(process.cwd(), 'uploads', 'resumes');
+const LOCAL_RESUME_DIR = path.join(getUploadsRoot(), 'resumes');
 
 let s3Client: S3Client | null = null;
 
@@ -98,8 +99,13 @@ export function isS3ResumeUrl(fileUrl: string) {
 }
 
 export function getLocalResumeAbsolutePath(fileUrl: string) {
-  const cleaned = normalizeText(fileUrl).replace(/^\/+/, '');
-  return path.join(process.cwd(), cleaned);
+  const cleaned = normalizeText(fileUrl);
+  const prefix = '/uploads/';
+  if (cleaned.startsWith(prefix)) {
+    const relative = cleaned.slice(prefix.length);
+    return path.join(getUploadsRoot(), relative);
+  }
+  return path.join(getUploadsRoot(), cleaned.replace(/^\/+/, ''));
 }
 
 export async function saveResumeBinary(input: UploadInput) {

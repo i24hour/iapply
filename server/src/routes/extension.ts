@@ -6,6 +6,7 @@ import { createError } from '../middleware/error-handler.js';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
 import { getTaskRunByAgentSession, updateTaskRunStatus } from '../lib/usage-tracking.js';
+import { ensureUploadsSubdir, getUploadsPublicUrl } from '../lib/uploads.js';
 
 const router = Router();
 
@@ -174,16 +175,13 @@ router.post('/application', authenticate, async (req: AuthRequest, res: Response
     let screenshotUrl: string | undefined;
 
     if (screenshotBase64) {
-      const screenshotsDir = path.join(process.cwd(), 'uploads', 'screenshots');
-      if (!fs.existsSync(screenshotsDir)) {
-        fs.mkdirSync(screenshotsDir, { recursive: true });
-      }
+      const screenshotsDir = ensureUploadsSubdir('screenshots');
 
       const filename = `${req.userId}-${jobId}-${Date.now()}.png`;
       const filepath = path.join(screenshotsDir, filename);
       const buffer = Buffer.from(screenshotBase64, 'base64');
       fs.writeFileSync(filepath, buffer);
-      screenshotUrl = `/uploads/screenshots/${filename}`;
+      screenshotUrl = getUploadsPublicUrl('screenshots', filename);
     }
 
     const { data: result, error } = await supabase

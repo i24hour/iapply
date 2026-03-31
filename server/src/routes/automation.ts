@@ -175,7 +175,7 @@ router.post('/pause', authenticate, async (req: AuthRequest, res: Response, next
       .in('status', ['idle', 'running']);
 
     await stopOpenTasksForUser(req.userId!);
-    pushCommand({ userId: req.userId!, type: 'stop_agent', payload: {} });
+    await pushCommand({ userId: req.userId!, type: 'stop_agent', payload: {} });
 
     res.json({ success: true, message: 'Automation paused' });
   } catch (error) {
@@ -193,7 +193,7 @@ router.post('/stop', authenticate, async (req: AuthRequest, res: Response, next:
       .in('status', ['idle', 'running']);
 
     await stopOpenTasksForUser(req.userId!);
-    pushCommand({ userId: req.userId!, type: 'stop_agent', payload: {} });
+    await pushCommand({ userId: req.userId!, type: 'stop_agent', payload: {} });
 
     res.json({ success: true, message: 'Automation stopped' });
   } catch (error) {

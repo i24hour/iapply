@@ -60,7 +60,7 @@ const ENABLE_RECOVERY_CAPTURE = false;
 const LLM_REQUEST_TIMEOUT_MS = 12000;
 
 // Constants
-const API_URL = 'https://iapply-telegram-bot.onrender.com';
+const API_URL = 'https://iapply-backend.vercel.app';
 const ANTHROPIC_DEFAULT_URL = 'https://api.anthropic.com';
 const OPENAI_DEFAULT_URL = 'https://api.openai.com';
 

@@ -1,6 +1,6 @@
 import { startAgent, stopAgent, getAgentStatus } from './agent-core.js';
 
-const API_URL = 'https://iapply-telegram-bot.onrender.com';
+const API_URL = 'https://iapply-backend.vercel.app';
 const TELEGRAM_POLL_INTERVAL = 5000;
 const MAX_DEBUG_LOGS = 250;
 const MAX_LOG_ENTRIES = 300;

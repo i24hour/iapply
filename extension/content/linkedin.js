@@ -1,6 +1,6 @@
 // LinkedIn content script for Job Auto Apply
 
-const API_URL = 'https://iapply-telegram-bot.onrender.com';
+const API_URL = 'https://iapply-backend.vercel.app';
 
 // State
 let isRunning = false;
