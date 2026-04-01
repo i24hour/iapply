@@ -1,4 +1,4 @@
-const API_URL = 'https://iapply-backend.vercel.app';
+const API_URL = 'https://iapply-telegram-bot.onrender.com';
 
 const statusEl = document.getElementById('status');
 const closeBtn = document.getElementById('closeBtn');

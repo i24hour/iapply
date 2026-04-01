@@ -13,7 +13,7 @@
   "host_permissions": [
     "https://www.linkedin.com/*",
     "http://localhost:*/*",
-    "https://iapply-backend.vercel.app/*",
+    "https://iapply-telegram-bot.onrender.com/*",
     "https://api.anthropic.com/*",
     "https://api.openai.com/*",
     "https://generativelanguage.googleapis.com/*"

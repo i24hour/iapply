@@ -5,8 +5,6 @@ import { getUserById, getUserByTelegramId, countLinkedTelegramUsers, supabase } 
 import { createTaskRun, recordUsageEvent, stopOpenTasksForUser } from './usage-tracking.js';
 
 let bot: TelegramBot | null = null;
-let activeTelegramToken = '';
-let activeBotMode: 'polling' | 'webhook' = 'polling';
 
 type TelegramIntentName =
   | 'apply'
@@ -38,9 +36,6 @@ function getAppUrl() {
   const configured = process.env.APP_URL?.trim();
   if (configured && !isLocalUrl(configured)) {
     return configured;
-  }
-  if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL}`;
   }
   return process.env.NODE_ENV === 'production'
     ? 'https://iapply-telegram-bot.onrender.com'
@@ -218,8 +213,8 @@ async function classifyTelegramIntent(params: {
   if (!apiKey) return null;
   const model = process.env.TELEGRAM_AGENT_MODEL?.trim() || 'gemini-3.1-flash-lite-preview';
 
-  const status = await getAgentStatus(params.userId);
-  const logs = (await getRecentLogs(params.userId, 10))
+  const status = getAgentStatus(params.userId);
+  const logs = getRecentLogs(params.userId, 10)
     .map((log) => `[${log.timestamp.toISOString()}] ${log.isError ? 'ERROR: ' : ''}${log.message}`)
     .join('\n');
 
@@ -332,39 +327,14 @@ export async function refreshBotProfile() {
   }
 }
 
-export function startTelegramBot(token: string, options: { mode?: 'polling' | 'webhook' } = {}) {
+export function startTelegramBot(token: string) {
   if (!token || token === 'your-telegram-bot-token') {
     console.log('⚠️  No Telegram bot token set. Skipping Telegram integration.');
     return;
   }
 
-  const mode = options.mode || (process.env.TELEGRAM_BOT_MODE?.trim() === 'webhook' ? 'webhook' : 'polling');
-  if (bot && activeTelegramToken === token && activeBotMode === mode) {
-    return;
-  }
-  if (bot && activeTelegramToken === token && activeBotMode !== mode) {
-    if (activeBotMode === 'polling') {
-      bot.stopPolling().catch(() => {});
-    }
-    activeBotMode = mode;
-    return;
-  }
-  if (bot && activeTelegramToken !== token) {
-    if (activeBotMode === 'polling') {
-      bot.stopPolling().catch(() => {});
-    }
-    bot.removeAllListeners();
-    bot = null;
-  }
-
-  bot = new TelegramBot(token, { polling: mode === 'polling' });
-  activeTelegramToken = token;
-  activeBotMode = mode;
-  console.log(
-    mode === 'polling'
-      ? '🤖 Telegram Bot started in polling mode! Send /help to your bot.'
-      : '🤖 Telegram Bot initialized in webhook mode.'
-  );
+  bot = new TelegramBot(token, { polling: true });
+  console.log('🤖 Telegram Bot started! Send /help to your bot.');
   refreshBotProfile().catch(console.error);
 
   // /start command
@@ -454,8 +424,8 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
     ).catch(console.error);
   }
 
-  async function sendStatusMessage(chatId: number, userId: string) {
-    const status = await getAgentStatus(userId);
+  function sendStatusMessage(chatId: number, userId: string) {
+    const status = getAgentStatus(userId);
     const emoji = status === 'running' ? '🟢' : status === 'error' ? '🔴' : '⚪';
     bot!.sendMessage(chatId, `${emoji} Agent Status: *${status.toUpperCase()}*`, {
       parse_mode: 'Markdown',
@@ -474,8 +444,8 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
     }
   }
 
-  async function sendLogsMessage(chatId: number, userId: string) {
-    const logs = await getRecentLogs(userId, 10);
+  function sendLogsMessage(chatId: number, userId: string) {
+    const logs = getRecentLogs(userId, 10);
     if (logs.length === 0) {
       bot!.sendMessage(chatId, '📭 No logs yet.').catch(console.error);
       return;
@@ -540,12 +510,12 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
     }
   }
 
-  async function requestScreenshot(chatId: number, userId: string) {
-    await pushCommand({ userId, type: 'request_screenshot', payload: {} });
+  function requestScreenshot(chatId: number, userId: string) {
+    pushCommand({ userId, type: 'request_screenshot', payload: {} });
     bot!.sendMessage(chatId, '📸 Requesting live screenshot...').catch(console.error);
   }
 
-  async function requestManualClick(chatId: number, userId: string, targetText: string) {
+  function requestManualClick(chatId: number, userId: string, targetText: string) {
     const normalizedTarget = normalizeClickTarget(targetText);
     if (!normalizedTarget) {
       bot!.sendMessage(chatId, '❌ Tell me what to click, for example: `click not now`.', {
@@ -554,7 +524,7 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
       return;
     }
 
-    await pushCommand({
+    pushCommand({
       userId,
       type: 'manual_click',
       payload: { targetText: normalizedTarget },
@@ -568,7 +538,7 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
   }
 
   async function stopAgent(chatId: number, userId: string) {
-    await pushCommand({ userId, type: 'stop_agent', payload: {} });
+    pushCommand({ userId, type: 'stop_agent', payload: {} });
     await stopOpenTasksForUser(userId);
     bot!.sendMessage(
       chatId,
@@ -609,7 +579,7 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
         })
       : null;
 
-    const cmd = await pushCommand({
+    const cmd = pushCommand({
       userId: user.id,
       type: 'start_agent',
       payload: {
@@ -650,22 +620,22 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
         await startApply(msg.chat.id, user, intent.query || '', msg.text || '', intent.userGoal);
         return true;
       case 'manual_click':
-        await requestManualClick(msg.chat.id, user.id, intent.targetText || intent.query || '');
+        requestManualClick(msg.chat.id, user.id, intent.targetText || intent.query || '');
         return true;
       case 'screenshot':
-        await requestScreenshot(msg.chat.id, user.id);
+        requestScreenshot(msg.chat.id, user.id);
         return true;
       case 'stop':
         await stopAgent(msg.chat.id, user.id);
         return true;
       case 'status':
-        await sendStatusMessage(msg.chat.id, user.id);
+        sendStatusMessage(msg.chat.id, user.id);
         return true;
       case 'usage':
         await sendUsageMessage(msg.chat.id, user.id);
         return true;
       case 'logs':
-        await sendLogsMessage(msg.chat.id, user.id);
+        sendLogsMessage(msg.chat.id, user.id);
         return true;
       case 'help':
         sendHelpMessage(msg.chat.id);
@@ -704,7 +674,7 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
       sendSignInPrompt(msg.chat.id);
       return;
     }
-    await requestManualClick(msg.chat.id, user.id, match?.[1] || '');
+    requestManualClick(msg.chat.id, user.id, match?.[1] || '');
   });
 
   bot.onText(/\/stop/, async (msg) => {
@@ -724,7 +694,7 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
       return;
     }
 
-    await sendStatusMessage(msg.chat.id, user.id);
+    sendStatusMessage(msg.chat.id, user.id);
   });
 
   bot.onText(/\/whoami/, async (msg) => {
@@ -748,7 +718,7 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
       return;
     }
 
-    await sendLogsMessage(msg.chat.id, user.id);
+    sendLogsMessage(msg.chat.id, user.id);
   });
 
   bot.onText(/\/screenshot/, async (msg) => {
@@ -758,7 +728,7 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
       return;
     }
 
-    await requestScreenshot(msg.chat.id, user.id);
+    requestScreenshot(msg.chat.id, user.id);
   });
 
   bot.onText(/\/help/, (msg) => {
@@ -847,41 +817,9 @@ export function startTelegramBot(token: string, options: { mode?: 'polling' | 'w
       .catch(() => {});
   });
 
-  if (activeBotMode === 'polling') {
-    bot.on('polling_error', (error) => {
-      console.error('Telegram polling error:', error.message);
-    });
-  }
-}
-
-export async function handleTelegramWebhookUpdate(update: TelegramBot.Update) {
-  if (!update) return;
-  const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
-  if (!token) return;
-  startTelegramBot(token, { mode: 'webhook' });
-  await bot?.processUpdate(update);
-}
-
-export async function registerTelegramWebhook(baseUrlOverride?: string) {
-  const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
-  if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
-
-  startTelegramBot(token, { mode: 'webhook' });
-  const baseUrl = (baseUrlOverride || getAppUrl()).replace(/\/+$/, '');
-  const webhookPath = process.env.TELEGRAM_WEBHOOK_PATH?.trim() || '/telegram/webhook';
-  const webhookUrl = `${baseUrl}${webhookPath.startsWith('/') ? webhookPath : `/${webhookPath}`}`;
-  const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
-
-  const setOk = await bot?.setWebHook(webhookUrl, secretToken ? ({ secret_token: secretToken } as any) : undefined);
-  if (!setOk) {
-    throw new Error(`Telegram setWebhook failed for ${webhookUrl}`);
-  }
-
-  const info = await bot?.getWebHookInfo();
-  return {
-    webhookUrl,
-    telegramWebhookInfo: info || null,
-  };
+  bot.on('polling_error', (error) => {
+    console.error('Telegram polling error:', error.message);
+  });
 }
 
 export async function sendTelegramMessage(userId: string, text: string) {

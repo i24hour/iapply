@@ -14,9 +14,9 @@ function getAppUrl(host?: string) {
   if (configured && !(onRender && configured.includes('localhost'))) {
     return configured;
   }
-  if (onRender) return 'https://iapply-backend.vercel.app';
+  if (onRender) return 'https://iapply-telegram-bot.onrender.com';
   return process.env.NODE_ENV === 'production'
-    ? 'https://iapply-backend.vercel.app'
+    ? 'https://iapply-telegram-bot.onrender.com'
     : 'http://localhost:3001';
 }
 
@@ -26,9 +26,9 @@ function getClientUrl(host?: string) {
   if (configured && !(onRender && configured.includes('localhost'))) {
     return configured;
   }
-  if (onRender) return 'https://iapply-frontend.vercel.app';
+  if (onRender) return 'https://iapply.onrender.com';
   return process.env.NODE_ENV === 'production'
-    ? 'https://iapply-frontend.vercel.app'
+    ? 'https://iapply.onrender.com'
     : 'http://localhost:3000';
 }
 

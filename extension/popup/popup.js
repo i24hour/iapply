@@ -1,5 +1,5 @@
-const API_URL = 'https://iapply-backend.vercel.app';
-const WEB_URL = 'https://iapply-frontend.vercel.app';
+const API_URL = 'https://iapply-telegram-bot.onrender.com';
+const WEB_URL = 'https://iapply.onrender.com';
 
 // Elements
 const elAuthStatus = document.getElementById('authStatus');

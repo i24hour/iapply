@@ -103,7 +103,7 @@ export default function LoginPage() {
           <button
             type="button"
             onClick={() => {
-              const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'https://iapply-backend.vercel.app';
+              const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'https://iapply-telegram-bot.onrender.com';
               const query = new URLSearchParams();
               if (telegramId) {
                 query.set('telegram_id', telegramId);

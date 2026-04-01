@@ -6,7 +6,6 @@ import { authenticate, AuthRequest } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
 import fs from 'fs';
 import path from 'path';
-import { ensureUploadsSubdir, getUploadsPublicUrl } from '../lib/uploads.js';
 
 const router = Router();
 const CAPTURE_RETENTION = 120;
@@ -35,12 +34,12 @@ function getRecentCaptures(userId: string, limit: number) {
 
 // Extension polls this every 5 seconds to get new commands from Telegram
 // JWT auth ensures only the real extension (belonging to the user) can poll
-router.get('/poll', authenticate, async (req: AuthRequest, res: Response) => {
+router.get('/poll', authenticate, (req: AuthRequest, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
 
-  const cmd = await getPendingCommand(req.userId);
+  const cmd = getPendingCommand(req.userId);
   if (!cmd) {
     return res.json({ success: true, command: null });
   }
@@ -56,48 +55,47 @@ router.get('/poll', authenticate, async (req: AuthRequest, res: Response) => {
 });
 
 // Extension marks a command as complete
-router.post('/complete/:id', authenticate, async (req: AuthRequest, res: Response) => {
+router.post('/complete/:id', authenticate, (req: AuthRequest, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
 
-  const ok = await completeCommand(req.userId, req.params.id);
+  const ok = completeCommand(req.userId, req.params.id);
   res.json({ success: ok });
 });
 
 // Extension sends live logs here → forwarded to Telegram via listener
-router.post('/log', authenticate, async (req: AuthRequest, res: Response) => {
+router.post('/log', authenticate, (req: AuthRequest, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
 
   const { message, isError } = req.body;
   if (message) {
-    await addLog(req.userId, message, !!isError);
+    addLog(req.userId, message, !!isError);
   }
   res.json({ success: true });
 });
 
 // Extension reports its status
-router.post('/status', authenticate, async (req: AuthRequest, res: Response) => {
+router.post('/status', authenticate, (req: AuthRequest, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
 
   const { status } = req.body;
-  const normalizedStatus = String(status || '').toLowerCase();
-  if (normalizedStatus === 'idle' || normalizedStatus === 'running' || normalizedStatus === 'error') {
-    await setAgentStatus(req.userId, normalizedStatus);
+  if (status) {
+    setAgentStatus(req.userId, status);
   }
   res.json({ success: true });
 });
 
-router.post('/request-screenshot', authenticate, async (req: AuthRequest, res: Response) => {
+router.post('/request-screenshot', authenticate, (req: AuthRequest, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
 
-  const command = await pushCommand({
+  const command = pushCommand({
     userId: req.userId,
     type: 'request_screenshot',
     payload: {},
@@ -106,7 +104,7 @@ router.post('/request-screenshot', authenticate, async (req: AuthRequest, res: R
   return res.json({ success: true, data: { commandId: command.id } });
 });
 
-router.post('/manual-click', authenticate, async (req: AuthRequest, res: Response) => {
+router.post('/manual-click', authenticate, (req: AuthRequest, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
@@ -116,7 +114,7 @@ router.post('/manual-click', authenticate, async (req: AuthRequest, res: Respons
     return res.status(400).json({ success: false, error: 'targetText is required' });
   }
 
-  const command = await pushCommand({
+  const command = pushCommand({
     userId: req.userId,
     type: 'manual_click',
     payload: { targetText: targetText.slice(0, 120) },
@@ -125,12 +123,12 @@ router.post('/manual-click', authenticate, async (req: AuthRequest, res: Respons
   return res.json({ success: true, data: { commandId: command.id } });
 });
 
-router.post('/start-recording', authenticate, async (req: AuthRequest, res: Response) => {
+router.post('/start-recording', authenticate, (req: AuthRequest, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
 
-  const command = await pushCommand({
+  const command = pushCommand({
     userId: req.userId,
     type: 'start_recording',
     payload: {},
@@ -139,12 +137,12 @@ router.post('/start-recording', authenticate, async (req: AuthRequest, res: Resp
   return res.json({ success: true, data: { commandId: command.id } });
 });
 
-router.post('/stop-recording', authenticate, async (req: AuthRequest, res: Response) => {
+router.post('/stop-recording', authenticate, (req: AuthRequest, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
 
-  const command = await pushCommand({
+  const command = pushCommand({
     userId: req.userId,
     type: 'stop_recording',
     payload: {},
@@ -153,12 +151,12 @@ router.post('/stop-recording', authenticate, async (req: AuthRequest, res: Respo
   return res.json({ success: true, data: { commandId: command.id } });
 });
 
-router.post('/recording-status', authenticate, async (req: AuthRequest, res: Response) => {
+router.post('/recording-status', authenticate, (req: AuthRequest, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
 
-  await setRecordingStatus(req.userId, Boolean(req.body?.active));
+  setRecordingStatus(req.userId, Boolean(req.body?.active));
   return res.json({ success: true });
 });
 
@@ -194,7 +192,10 @@ router.post('/capture', authenticate, async (req: AuthRequest, res: Response) =>
   }
 
   try {
-    const capturesDir = ensureUploadsSubdir('agent-captures');
+    const capturesDir = path.join(process.cwd(), 'uploads', 'agent-captures');
+    if (!fs.existsSync(capturesDir)) {
+      fs.mkdirSync(capturesDir, { recursive: true });
+    }
 
     const base64Data = String(screenshotBase64).replace(/^data:image\/\w+;base64,/, '');
     const filename = `${req.userId}-${Date.now()}.jpg`;
@@ -203,7 +204,7 @@ router.post('/capture', authenticate, async (req: AuthRequest, res: Response) =>
 
     const capture: AgentCapture = {
       id: filename,
-      url: getUploadsPublicUrl('agent-captures', filename),
+      url: `/uploads/agent-captures/${filename}`,
       createdAt: new Date().toISOString(),
     };
     addCapture(req.userId, capture);
@@ -225,14 +226,11 @@ router.get('/live', authenticate, async (req: AuthRequest, res: Response) => {
   const screenshotsLimit = Math.min(Math.max(Number(req.query.screenshots || 3), 1), 20);
   const recordingsLimit = Math.min(Math.max(Number(req.query.recordings || 12), 1), 60);
 
-  const recentLogs = await getRecentLogs(req.userId, logsLimit);
-  const logs = recentLogs.map((log) => ({
+  const logs = getRecentLogs(req.userId, logsLimit).map((log) => ({
     timestamp: log.timestamp.toISOString(),
     message: log.message,
     isError: log.isError,
   }));
-
-  const recordingActive = await getRecordingStatus(req.userId);
 
   const { data: screenshots } = await supabase
     .from('applications')
@@ -246,7 +244,7 @@ router.get('/live', authenticate, async (req: AuthRequest, res: Response) => {
     success: true,
     data: {
       logs,
-      recordingActive,
+      recordingActive: getRecordingStatus(req.userId),
       recordings: getRecentCaptures(req.userId, recordingsLimit),
       screenshots: (screenshots || []).map((item: any) => ({
         id: item.id,

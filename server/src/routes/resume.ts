@@ -9,12 +9,15 @@ import { authenticate, AuthRequest } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
 import { generateResumeDocx } from '../lib/resume-docx-generator.js';
 import { loadResumeBinary, saveResumeBinary } from '../lib/resume-storage.js';
-import { ensureUploadsSubdir, getUploadsPublicUrl } from '../lib/uploads.js';
 
 const router = Router();
 
 // Configure multer for file uploads
-const uploadDir = ensureUploadsSubdir('resumes');
+const uploadDir = path.join(process.cwd(), 'uploads', 'resumes');
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -215,7 +218,7 @@ router.post(
         throw createError('No file uploaded', 400);
       }
 
-      const fileUrl = getUploadsPublicUrl('resumes', req.file.filename);
+      const fileUrl = `/uploads/resumes/${req.file.filename}`;
 
       let parsedData = null;
       try {
