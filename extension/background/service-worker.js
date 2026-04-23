@@ -178,36 +178,6 @@ function withTimeout(promise, timeoutMs, label = 'operation') {
   });
 }
 
-function attachDebugger(target, version = '1.3') {
-  return new Promise((resolve, reject) => {
-    chrome.debugger.attach(target, version, () => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve(true);
-    });
-  });
-}
-
-function detachDebugger(target) {
-  return new Promise((resolve) => {
-    chrome.debugger.detach(target, () => resolve(true));
-  });
-}
-
-function sendDebuggerCommand(target, method, params = {}) {
-  return new Promise((resolve, reject) => {
-    chrome.debugger.sendCommand(target, method, params, (result) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve(result || null);
-    });
-  });
-}
-
 async function getPreferredLinkedInTab() {
   const status = getAgentStatus();
   const agentTabId = status?.tabId || null;
@@ -240,37 +210,6 @@ async function captureTabWindow(tab) {
   });
 }
 
-async function captureTabViaDebugger(tabId) {
-  if (!tabId) return null;
-  const target = { tabId };
-  let attached = false;
-
-  try {
-    await withTimeout(attachDebugger(target), 3000, 'debugger.attach');
-    attached = true;
-    await withTimeout(sendDebuggerCommand(target, 'Page.enable'), 3000, 'Page.enable');
-    const screenshot = await withTimeout(sendDebuggerCommand(target, 'Page.captureScreenshot', {
-      format: 'jpeg',
-      quality: 55,
-      fromSurface: true,
-    }), 4000, 'Page.captureScreenshot');
-    const data = screenshot?.data;
-    if (!data) return null;
-    return `data:image/jpeg;base64,${data}`;
-  } catch (error) {
-    const now = Date.now();
-    if (now - lastCaptureFailureLogAt > 30000) {
-      lastCaptureFailureLogAt = now;
-      emitAgentLog(`Debugger capture failed: ${error.message || 'unknown error'}`, true).catch(() => {});
-    }
-    return null;
-  } finally {
-    if (attached) {
-      await withTimeout(detachDebugger(target), 2000, 'debugger.detach').catch(() => {});
-    }
-  }
-}
-
 async function uploadFrameToEndpoint(dataUrl, endpointPath) {
   const headers = await getAuthHeaders();
   if (!headers.Authorization) return false;
@@ -284,7 +223,7 @@ async function uploadFrameToEndpoint(dataUrl, endpointPath) {
   return response.ok;
 }
 
-async function captureAgentFrame({ allowDebugger = true } = {}) {
+async function captureAgentFrame() {
   if (captureInFlightPromise) {
     if (Date.now() - captureInFlightStartedAt > CAPTURE_STALE_LOCK_MS) {
       captureInFlightPromise = null;
@@ -303,10 +242,12 @@ async function captureAgentFrame({ allowDebugger = true } = {}) {
     const visibleCapture = await captureTabWindow(tab);
     if (visibleCapture) return visibleCapture;
 
-    if (!allowDebugger) return null;
-
-    // Fallback: capture directly from the target tab even when it is not the visible tab.
-    return captureTabViaDebugger(tab.id);
+    const now = Date.now();
+    if (now - lastCaptureFailureLogAt > 30000) {
+      lastCaptureFailureLogAt = now;
+      emitAgentLog('Live frame unavailable: keep the LinkedIn tab visible in its window to capture screenshots.', true).catch(() => {});
+    }
+    return null;
   })();
 
   try {
@@ -318,7 +259,7 @@ async function captureAgentFrame({ allowDebugger = true } = {}) {
 }
 
 async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '', uploadToBackend = true } = {}) {
-  const liveFrame = await captureAgentFrame({ allowDebugger: true });
+  const liveFrame = await captureAgentFrame();
   let source = 'live';
   let dataUrl = liveFrame;
 
@@ -366,8 +307,7 @@ async function pushDebugCaptureToTelegram({ reason = '', validationSummary = '',
 
 async function captureAndUploadFrame(trigger = 'interval') {
   try {
-    const allowDebugger = trigger === 'manual' || trigger === 'debug';
-    const dataUrl = await captureAgentFrame({ allowDebugger });
+    const dataUrl = await captureAgentFrame();
 
     if (!dataUrl) {
       const shouldNotifyNoFrame = trigger === 'manual' || trigger === 'debug';
@@ -1170,7 +1110,7 @@ async function pollTelegramBridge() {
       }).catch(() => {});
     } else if (cmd.type === 'request_screenshot') {
       try {
-        const liveFrame = await captureAgentFrame({ allowDebugger: true });
+        const liveFrame = await captureAgentFrame();
         if (liveFrame) {
           lastCapturedAgentFrame = liveFrame;
           lastCapturedAgentFrameAt = Date.now();

@@ -1,23 +1,26 @@
 {
   "manifest_version": 3,
   "name": "Job Auto Apply",
-  "version": "1.0.0",
+  "short_name": "iApply",
+  "version": "1.0.1",
   "description": "Automatically apply to jobs on LinkedIn",
+  "minimum_chrome_version": "116",
   "permissions": [
     "storage",
     "tabs",
     "activeTab",
-    "scripting",
-    "debugger"
+    "scripting"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
-    "http://localhost:*/*",
     "https://iapply-telegram-bot.onrender.com/*",
     "https://api.anthropic.com/*",
     "https://api.openai.com/*",
     "https://generativelanguage.googleapis.com/*"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
@@ -38,7 +41,8 @@
         "auth/callback.js"
       ],
       "matches": [
-        "<all_urls>"
+        "https://iapply.onrender.com/*",
+        "https://iapply-telegram-bot.onrender.com/*"
       ]
     }
   ],
